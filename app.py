@@ -12,7 +12,7 @@ from datetime import datetime
 # 1. 页面配置 & CSS (样式增强)
 # ==========================================
 st.set_page_config(
-    page_title="AI Pro 交易终端 (最终版)",
+    page_title="AI Pro 交易终端 (最终修复版)",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -25,7 +25,7 @@ st.markdown("""
     div[data-testid="stDataFrame"] { font-size: 12px; }
     h1 { margin-bottom: 0px; padding-bottom: 0px; }
     
-    /* 交易面板卡片样式 */
+    /* 交易面板卡片样式 - 强制渲染 */
     .trade-panel {
         background-color: #ffffff;
         border: 1px solid #e0e0e0;
@@ -84,14 +84,14 @@ def get_nasdaq100_list():
 @st.cache_data(ttl=600)
 def scan_market_final(tickers):
     data_list = []
-    # 增加批次大小以加快速度，Yahoo通常允许
+    # 增加批次大小以加快速度
     batch_size = 15
     total_batches = (len(tickers) + batch_size - 1) // batch_size
     
     for i in range(total_batches):
         batch = tickers[i*batch_size : (i+1)*batch_size]
         try:
-            # 下载3个月数据以计算RSI
+            # 下载3个月数据
             df_batch = yf.download(batch, period="3mo", interval="1d", group_by='ticker', progress=False, threads=False)
             
             for ticker in batch:
@@ -124,7 +124,7 @@ def scan_market_final(tickers):
                         "Price": curr,
                         "Chg": pct,
                         "Signal": signal,
-                        "Signal_Score": 1 if signal != "⚪" else 0 # 用于排序
+                        "Signal_Score": 1 if signal != "⚪" else 0
                     })
                 except: continue
         except: continue
@@ -159,7 +159,6 @@ with col_nav:
         df_scan = scan_market_final(tickers)
     
     if not df_scan.empty:
-        # 排序：有信号在前 -> 代码字母序
         df_scan = df_scan.sort_values(by=["Signal_Score", "Symbol"], ascending=[False, True])
         
         selection = st.dataframe(
@@ -286,59 +285,53 @@ with col_info:
             support = curr * 0.95
             resis = curr * 1.05
 
-        # 🤖 AI 策略建议 (修复显示乱码问题)
-        # 这里的 HTML 结构被简化并确保渲染正确
-        strategy_html = f"""
-        <div class="trade-panel">
-            <h4>🤖 AI 策略建议</h4>
-            <div style="font-size:13px; color:#666; margin-bottom:15px;">基于布林带波动率模型</div>
-            
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                <span class="label-sell">阻力位 (Sell)</span>
-                <span class="price-down">${resis:.2f}</span>
-            </div>
-            
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; border-top:1px dashed #eee; border-bottom:1px dashed #eee; padding:8px 0;">
-                <span style="font-weight:600;">当前价格</span>
-                <span class="price-neutral">${curr:.2f}</span>
-            </div>
-            
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-                <span class="label-buy">支撑位 (Buy)</span>
-                <span class="price-up">${support:.2f}</span>
-            </div>
-        </div>
-        """
-        st.markdown(strategy_html, unsafe_allow_html=True)
+        # --- 核心修复：移除HTML字符串中的缩进 ---
+        # 以前的写法因为包含缩进，被Markdown误认为是代码块。
+        # 现在的写法去除了所有不必要的空格，确保被正确解析为HTML。
+        
+        st.markdown(f"""
+<div class="trade-panel">
+<h4>🤖 AI 策略建议</h4>
+<div style="font-size:13px; color:#666; margin-bottom:15px;">基于布林带波动率模型</div>
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+<span class="label-sell">阻力位 (Sell)</span>
+<span class="price-down">${resis:.2f}</span>
+</div>
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; border-top:1px dashed #eee; border-bottom:1px dashed #eee; padding:8px 0;">
+<span style="font-weight:600;">当前价格</span>
+<span class="price-neutral">${curr:.2f}</span>
+</div>
+<div style="display:flex; justify-content:space-between; align-items:center;">
+<span class="label-buy">支撑位 (Buy)</span>
+<span class="price-up">${support:.2f}</span>
+</div>
+</div>
+""", unsafe_allow_html=True)
         
         # 🏦 机构评级
         target = info.get('targetMeanPrice', 0)
         rating = info.get('recommendationKey', 'none').upper().replace('_', ' ')
         
-        rating_html = f"""
-        <div class="trade-panel">
-            <h4>🏦 机构观点</h4>
-            <div style="text-align:center; font-size:20px; font-weight:800; color:#2962FF; margin:15px 0;">
-                {rating}
-            </div>
-            <div style="display:flex; justify-content:space-between; font-size:13px;">
-                <span>华尔街目标价:</span>
-                <strong>${target}</strong>
-            </div>
-        </div>
-        """
-        st.markdown(rating_html, unsafe_allow_html=True)
+        st.markdown(f"""
+<div class="trade-panel">
+<h4>🏦 机构观点</h4>
+<div style="text-align:center; font-size:20px; font-weight:800; color:#2962FF; margin:15px 0;">{rating}</div>
+<div style="display:flex; justify-content:space-between; font-size:13px;">
+<span>华尔街目标价:</span>
+<strong>${target}</strong>
+</div>
+</div>
+""", unsafe_allow_html=True)
         
         # 📈 核心数据
-        data_html = f"""
-        <div class="trade-panel">
-            <h4>📈 核心数据</h4>
-            <div style="font-size:13px; line-height:2.2;">
-                <div style="display:flex; justify-content:space-between;"><span>市盈率 (PE):</span> <strong>{info.get('trailingPE','N/A')}</strong></div>
-                <div style="display:flex; justify-content:space-between;"><span>市值:</span> <strong>{info.get('marketCap',0)/1e9:.1f}B</strong></div>
-                <div style="display:flex; justify-content:space-between;"><span>52周高:</span> <strong>{info.get('fiftyTwoWeekHigh','N/A')}</strong></div>
-                <div style="display:flex; justify-content:space-between;"><span>做空比:</span> <strong>{info.get('shortRatio','N/A')}</strong></div>
-            </div>
-        </div>
-        """
-        st.markdown(data_html, unsafe_allow_html=True)
+        st.markdown(f"""
+<div class="trade-panel">
+<h4>📈 核心数据</h4>
+<div style="font-size:13px; line-height:2.2;">
+<div style="display:flex; justify-content:space-between;"><span>市盈率 (PE):</span> <strong>{info.get('trailingPE','N/A')}</strong></div>
+<div style="display:flex; justify-content:space-between;"><span>市值:</span> <strong>{info.get('marketCap',0)/1e9:.1f}B</strong></div>
+<div style="display:flex; justify-content:space-between;"><span>52周高:</span> <strong>{info.get('fiftyTwoWeekHigh','N/A')}</strong></div>
+<div style="display:flex; justify-content:space-between;"><span>做空比:</span> <strong>{info.get('shortRatio','N/A')}</strong></div>
+</div>
+</div>
+""", unsafe_allow_html=True)
