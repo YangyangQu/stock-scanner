@@ -12,7 +12,7 @@ from datetime import datetime
 # 1. 页面配置 & CSS
 # ==========================================
 st.set_page_config(
-    page_title="AI Pro 交易终端 (机构版)",
+    page_title="AI Pro 交易终端 (修复版)",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -39,9 +39,6 @@ st.markdown("""
     
     .label-buy { background-color: #e8f5e9; color: #2e7d32; padding: 4px 8px; border-radius: 4px; font-weight: 600; font-size: 12px; }
     .label-sell { background-color: #ffebee; color: #c62828; padding: 4px 8px; border-radius: 4px; font-weight: 600; font-size: 12px; }
-    
-    /* 进度条样式 */
-    .stProgress > div > div > div > div { background-color: #2962FF; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -124,7 +121,7 @@ def get_detailed_history(ticker, period, interval):
         stock = yf.Ticker(ticker)
         hist = stock.history(period=period, interval=interval)
         info = stock.info
-        return hist, info, stock
+        return hist, info, stock # 返回3个值
     except: return pd.DataFrame(), {}, None
 
 def get_news_ddg(ticker):
@@ -133,26 +130,20 @@ def get_news_ddg(ticker):
         return list(results)
     except: return []
 
-# --- 新增：计算期权PCR和获取内幕交易 ---
 @st.cache_data(ttl=3600)
 def get_advanced_data(ticker):
     stock = yf.Ticker(ticker)
-    
-    # 1. 计算 Put/Call Ratio (PCR)
     pcr = "N/A"
     try:
         opts = stock.options
         if opts:
-            # 获取最近的期权链
             opt_chain = stock.option_chain(opts[0])
             calls_vol = opt_chain.calls['volume'].sum()
             puts_vol = opt_chain.puts['volume'].sum()
             if calls_vol > 0:
-                pcr_val = puts_vol / calls_vol
-                pcr = round(pcr_val, 2)
+                pcr = round(puts_vol / calls_vol, 2)
     except: pass
     
-    # 2. 获取内幕交易
     insider = pd.DataFrame()
     try:
         insider = stock.insider_transactions
@@ -204,9 +195,10 @@ with col_chart:
     if 'period' not in st.session_state: st.session_state.period = '1d'
     if 'interval' not in st.session_state: st.session_state.interval = '1m'
     
+    # 获取顶部数据 (这里接收3个返回值是正确的)
     hist_fast, info, stock_obj = get_detailed_history(selected_ticker, "1d", "1m")
     
-    # 获取高级数据 (PCR & Insider)
+    # 获取高级数据
     pcr_val, insider_df = get_advanced_data(selected_ticker)
     
     if not hist_fast.empty:
@@ -234,7 +226,8 @@ with col_chart:
     with p_cols[3]: st.button("日线", on_click=set_p, args=('6mo','1d'), use_container_width=True)
     with p_cols[4]: st.button("周线", on_click=set_p, args=('2y','1wk'), use_container_width=True)
 
-    hist, _ = get_detailed_history(selected_ticker, st.session_state.period, st.session_state.interval)
+    # === 修复点：这里调用函数时，必须接收3个返回值，哪怕不用第3个 ===
+    hist, _, _ = get_detailed_history(selected_ticker, st.session_state.period, st.session_state.interval)
     
     if not hist.empty:
         macd = ta.macd(hist['Close'])
@@ -264,7 +257,7 @@ with col_chart:
         fig.update_layout(height=650, margin=dict(l=10, r=10, t=10, b=10), plot_bgcolor='white', paper_bgcolor='white', showlegend=False, xaxis_rangeslider_visible=False, yaxis=dict(range=[y_min, y_max], gridcolor='#f0f0f0', side='right'), yaxis2=dict(gridcolor='#f0f0f0', side='right'), yaxis3=dict(gridcolor='#f0f0f0', side='right'), hovermode="x unified", xaxis=dict(rangebreaks=rangebreaks))
         st.plotly_chart(fig, use_container_width=True)
 
-    # --- 底部多维信息 (Tabs) ---
+    # --- 底部 Tabs ---
     tab1, tab2, tab3 = st.tabs(["📰 实时新闻", "💼 高管交易", "📅 财报信息"])
     
     with tab1:
@@ -274,13 +267,11 @@ with col_chart:
 
     with tab2:
         if not insider_df.empty:
-            # 简单清洗数据
             st.dataframe(insider_df, use_container_width=True, hide_index=True)
         else:
             st.info("近期无高管交易记录")
 
     with tab3:
-        # 获取下一次财报日期
         try:
             calendar = stock_obj.calendar
             if calendar and 'Earnings Date' in calendar:
@@ -324,16 +315,14 @@ with col_info:
 </div>
 """, unsafe_allow_html=True)
         
-        # --- 新增：市场情绪看板 ---
         short_float = info.get('shortPercentOfFloat', 0)
         short_val = f"{short_float*100:.2f}%" if short_float else "N/A"
         
-        # PCR 颜色判断
         pcr_color = "#333"
         pcr_text = str(pcr_val)
         if pcr_val != "N/A":
-            if pcr_val > 1.0: pcr_color = "#d91e18" # 看跌
-            elif pcr_val < 0.7: pcr_color = "#008000" # 看涨
+            if pcr_val > 1.0: pcr_color = "#d91e18" 
+            elif pcr_val < 0.7: pcr_color = "#008000" 
         
         st.markdown(f"""
 <div class="trade-panel">
@@ -342,20 +331,15 @@ with col_info:
 <span>期权PCR比率:</span>
 <strong style="color:{pcr_color}">{pcr_text}</strong>
 </div>
-<div style="font-size:11px; color:#666; margin-bottom:15px;">
-(>1.0 偏空, <0.7 偏多)
-</div>
+<div style="font-size:11px; color:#666; margin-bottom:15px;">(>1.0 偏空, <0.7 偏多)</div>
 <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
 <span>做空比例:</span>
 <strong>{short_val}</strong>
 </div>
-<div style="font-size:11px; color:#666;">
-(>10% 有逼空风险)
-</div>
+<div style="font-size:11px; color:#666;">(>10% 有逼空风险)</div>
 </div>
 """, unsafe_allow_html=True)
         
-        # 机构评级
         target = info.get('targetMeanPrice', 0)
         rating = info.get('recommendationKey', 'none').upper().replace('_', ' ')
         
@@ -370,7 +354,6 @@ with col_info:
 </div>
 """, unsafe_allow_html=True)
         
-        # 核心数据
         st.markdown(f"""
 <div class="trade-panel">
 <h4>📈 核心数据</h4>
