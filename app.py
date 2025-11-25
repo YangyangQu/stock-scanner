@@ -12,7 +12,7 @@ from datetime import datetime
 # 1. 页面配置 & CSS
 # ==========================================
 st.set_page_config(
-    page_title="AI Pro 交易终端 (修复版)",
+    page_title="AI Pro 交易终端 (精准版)",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -64,15 +64,19 @@ def get_nasdaq100_list():
     ]
 
 @st.cache_data(ttl=300)
-def scan_market_realtime(tickers):
+def scan_market_daily(tickers):
+    """
+    修正逻辑：使用日线数据 (1d) 计算涨跌幅，确保与市场即时涨跌一致
+    """
     data_list = []
-    batch_size = 10
+    batch_size = 15
     total_batches = (len(tickers) + batch_size - 1) // batch_size
     
     for i in range(total_batches):
         batch = tickers[i*batch_size : (i+1)*batch_size]
         try:
-            df_batch = yf.download(batch, period="5d", interval="15m", group_by='ticker', progress=False, threads=False)
+            # 下载过去1个月的日线数据
+            df_batch = yf.download(batch, period="1mo", interval="1d", group_by='ticker', progress=False, threads=False)
             
             for ticker in batch:
                 try:
@@ -80,20 +84,17 @@ def scan_market_realtime(tickers):
                     else: df = df_batch[ticker]
                     
                     df = df.dropna()
-                    if len(df) < 10: continue
+                    if len(df) < 5: continue
                     
+                    # 1. 价格与涨跌 (基于日线)
                     curr = df['Close'].iloc[-1]
-                    today_date = df.index[-1].date()
-                    prev_days_data = df[df.index.date != today_date]
+                    prev = df['Close'].iloc[-2]
+                    pct = ((curr - prev) / prev) # 这是标准的日涨跌幅
                     
-                    if not prev_days_data.empty:
-                        prev_close = prev_days_data['Close'].iloc[-1]
-                        pct = ((curr - prev_close) / prev_close)
-                    else:
-                        pct = ((curr - df['Close'].iloc[0]) / df['Close'].iloc[0])
-
+                    # 2. 趋势图 (取最近20天)
                     trend = df['Close'].tail(20).tolist()
                     
+                    # 3. 信号 (RSI)
                     rsi = ta.rsi(df['Close'], length=14)
                     rsi_val = rsi.iloc[-1] if rsi is not None else 50
                     
@@ -121,7 +122,7 @@ def get_detailed_history(ticker, period, interval):
         stock = yf.Ticker(ticker)
         hist = stock.history(period=period, interval=interval)
         info = stock.info
-        return hist, info, stock # 返回3个值
+        return hist, info, stock
     except: return pd.DataFrame(), {}, None
 
 def get_news_ddg(ticker):
@@ -157,15 +158,15 @@ def get_advanced_data(ticker):
 # 3. 界面布局
 # ==========================================
 
-st.title("⚡ AI 量化全能终端 (机构版)")
+st.title("⚡ AI 量化全能终端 (精准版)")
 col_nav, col_chart, col_info = st.columns([2.5, 5.5, 2.0])
 
-# --- 左侧列表 ---
+# --- 左侧列表 (已修正幅度计算) ---
 with col_nav:
     st.subheader("全市场扫描")
     tickers = get_nasdaq100_list()
-    with st.spinner("正在同步实时行情..."):
-        df_scan = scan_market_realtime(tickers)
+    with st.spinner("同步行情中..."):
+        df_scan = scan_market_daily(tickers)
     
     if not df_scan.empty:
         df_scan = df_scan.sort_values(by="SortKey", ascending=False)
@@ -195,10 +196,7 @@ with col_chart:
     if 'period' not in st.session_state: st.session_state.period = '1d'
     if 'interval' not in st.session_state: st.session_state.interval = '1m'
     
-    # 获取顶部数据 (这里接收3个返回值是正确的)
     hist_fast, info, stock_obj = get_detailed_history(selected_ticker, "1d", "1m")
-    
-    # 获取高级数据
     pcr_val, insider_df = get_advanced_data(selected_ticker)
     
     if not hist_fast.empty:
@@ -226,7 +224,6 @@ with col_chart:
     with p_cols[3]: st.button("日线", on_click=set_p, args=('6mo','1d'), use_container_width=True)
     with p_cols[4]: st.button("周线", on_click=set_p, args=('2y','1wk'), use_container_width=True)
 
-    # === 修复点：这里调用函数时，必须接收3个返回值，哪怕不用第3个 ===
     hist, _, _ = get_detailed_history(selected_ticker, st.session_state.period, st.session_state.interval)
     
     if not hist.empty:
@@ -257,7 +254,6 @@ with col_chart:
         fig.update_layout(height=650, margin=dict(l=10, r=10, t=10, b=10), plot_bgcolor='white', paper_bgcolor='white', showlegend=False, xaxis_rangeslider_visible=False, yaxis=dict(range=[y_min, y_max], gridcolor='#f0f0f0', side='right'), yaxis2=dict(gridcolor='#f0f0f0', side='right'), yaxis3=dict(gridcolor='#f0f0f0', side='right'), hovermode="x unified", xaxis=dict(rangebreaks=rangebreaks))
         st.plotly_chart(fig, use_container_width=True)
 
-    # --- 底部 Tabs ---
     tab1, tab2, tab3 = st.tabs(["📰 实时新闻", "💼 高管交易", "📅 财报信息"])
     
     with tab1:
@@ -277,29 +273,39 @@ with col_chart:
             if calendar and 'Earnings Date' in calendar:
                 earnings_date = calendar['Earnings Date'][0]
                 st.metric("下一次财报日", f"{earnings_date}")
-            else:
-                st.write("暂无财报日历数据")
+            else: st.write("暂无财报日历数据")
         except: st.write("数据不可用")
 
-# --- 右侧：分析区 ---
+# --- 右侧：分析区 (修复：策略始终锚定日线) ---
 with col_info:
     st.subheader("📊 决策看板")
     
     if not hist.empty:
         curr = hist['Close'].iloc[-1]
-        bb = ta.bbands(hist['Close'], length=20, std=2.0)
         
-        if bb is not None:
-            support = bb.iloc[-1, 0]
-            resis = bb.iloc[-1, 2]
-        else:
-            support = curr * 0.95
-            resis = curr * 1.05
+        # === 核心修正：单独拉取日线数据来计算策略，不受主图周期影响 ===
+        try:
+            # 获取最近6个月的日线数据，保证策略的稳定性
+            hist_daily, _, _ = get_detailed_history(selected_ticker, "6mo", "1d")
+            if not hist_daily.empty:
+                bb = ta.bbands(hist_daily['Close'], length=20, std=2.0)
+                if bb is not None:
+                    support = bb.iloc[-1, 0] # Lower Band
+                    resis = bb.iloc[-1, 2]   # Upper Band
+                else:
+                    support = curr * 0.90
+                    resis = curr * 1.10
+            else:
+                support = curr * 0.90
+                resis = curr * 1.10
+        except:
+            support = curr * 0.90
+            resis = curr * 1.10
 
         st.markdown(f"""
 <div class="trade-panel">
 <h4>🤖 AI 策略建议</h4>
-<div style="font-size:13px; color:#666; margin-bottom:15px;">基于布林带波动率模型</div>
+<div style="font-size:13px; color:#666; margin-bottom:15px;">基于日线布林带模型 (中短线)</div>
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
 <span class="label-sell">阻力位 (Sell)</span>
 <span class="price-down">${resis:.2f}</span>
@@ -317,7 +323,6 @@ with col_info:
         
         short_float = info.get('shortPercentOfFloat', 0)
         short_val = f"{short_float*100:.2f}%" if short_float else "N/A"
-        
         pcr_color = "#333"
         pcr_text = str(pcr_val)
         if pcr_val != "N/A":
