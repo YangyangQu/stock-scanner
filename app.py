@@ -9,10 +9,10 @@ from deep_translator import GoogleTranslator
 from datetime import datetime
 
 # ==========================================
-# 1. 页面配置 & CSS
+# 1. 页面配置 & CSS (样式增强)
 # ==========================================
 st.set_page_config(
-    page_title="AI Pro 交易终端 (完美版)",
+    page_title="AI Pro 交易终端 (最终版)",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -20,31 +20,48 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    .block-container { padding-top: 1rem; padding-bottom: 2rem; }
+    /* 基础布局优化 */
+    .block-container { padding-top: 1rem; padding-bottom: 2rem; max-width: 100%; }
     div[data-testid="stDataFrame"] { font-size: 12px; }
     h1 { margin-bottom: 0px; padding-bottom: 0px; }
     
-    /* 交易面板样式 */
+    /* 交易面板卡片样式 */
     .trade-panel {
         background-color: #ffffff;
         border: 1px solid #e0e0e0;
-        border-radius: 8px;
-        padding: 16px;
-        margin-bottom: 12px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 15px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.04);
     }
     
-    /* 价格颜色 */
-    .price-up { color: #008000; font-weight: bold; }
-    .price-down { color: #d91e18; font-weight: bold; }
+    /* 价格颜色定义 */
+    .price-up { color: #008000; font-weight: 700; font-size: 18px; }
+    .price-down { color: #d91e18; font-weight: 700; font-size: 18px; }
+    .price-neutral { color: #333333; font-weight: 700; font-size: 16px; }
     
-    /* 信号圆点 */
-    .signal-dot { font-size: 14px; margin-right: 5px; }
+    /* 标签样式 */
+    .label-buy {
+        background-color: #e8f5e9;
+        color: #2e7d32;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 600;
+    }
+    .label-sell {
+        background-color: #ffebee;
+        color: #c62828;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 600;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 数据逻辑 (修复 RSI 和 信号)
+# 2. 数据逻辑
 # ==========================================
 
 @st.cache_data(ttl=3600)
@@ -56,7 +73,6 @@ def translate_text(text):
 
 @st.cache_data(ttl=3600)
 def get_nasdaq100_list():
-    # 活跃股在前，保证体验
     return [
         "NVDA", "TSLA", "AAPL", "AMD", "MSFT", "AMZN", "META", "GOOGL", "AVGO", "COST",
         "NFLX", "PEP", "LIN", "CSCO", "TMUS", "ADBE", "QCOM", "TXN", "INTU", "AMGN",
@@ -66,15 +82,16 @@ def get_nasdaq100_list():
     ]
 
 @st.cache_data(ttl=600)
-def scan_market_fixed(tickers):
+def scan_market_final(tickers):
     data_list = []
-    batch_size = 10
+    # 增加批次大小以加快速度，Yahoo通常允许
+    batch_size = 15
     total_batches = (len(tickers) + batch_size - 1) // batch_size
     
     for i in range(total_batches):
         batch = tickers[i*batch_size : (i+1)*batch_size]
         try:
-            # 关键修复：下载 3个月 数据，确保 RSI(14) 能计算出来！
+            # 下载3个月数据以计算RSI
             df_batch = yf.download(batch, period="3mo", interval="1d", group_by='ticker', progress=False, threads=False)
             
             for ticker in batch:
@@ -83,23 +100,21 @@ def scan_market_fixed(tickers):
                     else: df = df_batch[ticker]
                     
                     df = df.dropna()
-                    if len(df) < 20: continue # 确保数据足够计算指标
+                    if len(df) < 20: continue
                     
                     curr = df['Close'].iloc[-1]
                     prev = df['Close'].iloc[-2]
                     pct = ((curr - prev) / prev)
-                    
-                    # 迷你图数据
                     trend = df['Close'].tail(20).tolist()
                     
-                    # 关键修复：指标计算
+                    # 指标
                     rsi = ta.rsi(df['Close'], length=14)
                     rsi_val = rsi.iloc[-1] if rsi is not None else 50
                     
-                    # 信号放宽标准，让更多股票显示信号
+                    # 信号
                     signal = "⚪"
-                    if rsi_val < 35: signal = "🔥抄底" # 超卖
-                    elif rsi_val > 70: signal = "⚠️止盈" # 超买
+                    if rsi_val < 35: signal = "🔥抄底"
+                    elif rsi_val > 70: signal = "⚠️止盈"
                     elif pct > 0.03: signal = "🚀暴涨"
                     elif pct < -0.03: signal = "📉暴跌"
                     
@@ -108,7 +123,8 @@ def scan_market_fixed(tickers):
                         "Trend": trend,
                         "Price": curr,
                         "Chg": pct,
-                        "Signal": signal
+                        "Signal": signal,
+                        "Signal_Score": 1 if signal != "⚪" else 0 # 用于排序
                     })
                 except: continue
         except: continue
@@ -135,17 +151,16 @@ def get_news_ddg(ticker):
 st.title("⚡ AI 量化全能终端")
 col_nav, col_chart, col_info = st.columns([2.5, 5.5, 2.0])
 
-# --- 左侧：列表 ---
+# --- 左侧列表 ---
 with col_nav:
     st.subheader("全市场扫描")
     tickers = get_nasdaq100_list()
-    with st.spinner("正在计算全市场信号..."):
-        df_scan = scan_market_fixed(tickers)
+    with st.spinner("计算信号中..."):
+        df_scan = scan_market_final(tickers)
     
     if not df_scan.empty:
-        # 排序：把有信号的排在最前面
-        df_scan["SortKey"] = df_scan["Signal"].apply(lambda x: 0 if x == "⚪" else 1)
-        df_scan = df_scan.sort_values(by=["SortKey", "Symbol"], ascending=[False, True])
+        # 排序：有信号在前 -> 代码字母序
+        df_scan = df_scan.sort_values(by=["Signal_Score", "Symbol"], ascending=[False, True])
         
         selection = st.dataframe(
             df_scan,
@@ -168,12 +183,12 @@ with col_nav:
     else:
         selected_ticker = "NVDA"
 
-# --- 中间：图表 ---
+# --- 中间图表 ---
 with col_chart:
     if 'period' not in st.session_state: st.session_state.period = '1d'
     if 'interval' not in st.session_state: st.session_state.interval = '1m'
     
-    # 顶部信息
+    # 顶部价格
     hist_fast, info = get_detailed_history(selected_ticker, "1d", "1m")
     if not hist_fast.empty:
         curr = hist_fast['Close'].iloc[-1]
@@ -188,8 +203,8 @@ with col_chart:
             st.caption(info.get('shortName', selected_ticker))
         with c2:
             st.markdown(f"<h2 style='color:{color}'>${curr:.2f} <span style='font-size:18px'>({diff:+.2f} / {pct:+.2f}%)</span></h2>", unsafe_allow_html=True)
-
-    # 周期切换
+    
+    # 周期按钮
     p_cols = st.columns(5)
     def set_p(p, i): 
         st.session_state.period = p
@@ -201,33 +216,28 @@ with col_chart:
     with p_cols[3]: st.button("日线", on_click=set_p, args=('6mo','1d'), use_container_width=True)
     with p_cols[4]: st.button("周线", on_click=set_p, args=('2y','1wk'), use_container_width=True)
 
-    # 获取绘图数据
+    # 绘图数据
     hist, _ = get_detailed_history(selected_ticker, st.session_state.period, st.session_state.interval)
-
+    
     if not hist.empty:
         macd = ta.macd(hist['Close'])
-        
-        # 动态 Y 轴
         y_min = hist['Close'].min() * 0.999
         y_max = hist['Close'].max() * 1.001
         
         fig = make_subplots(
-            rows=3, cols=1, 
-            shared_xaxes=True, 
-            vertical_spacing=0.03, 
-            row_heights=[0.6, 0.2, 0.2],
-            subplot_titles=("价格趋势", "成交量", "MACD")
+            rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, 
+            row_heights=[0.6, 0.2, 0.2], subplot_titles=("价格", "成交量", "MACD")
         )
         
-        # 1. 价格 (山峰图)
+        # 1. 价格
         fill_color = 'rgba(0, 128, 0, 0.1)' if diff >= 0 else 'rgba(217, 30, 24, 0.1)'
         line_color = '#008000' if diff >= 0 else '#d91e18'
-        fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'], mode='lines', fill='tozeroy', fillcolor=fill_color, line=dict(color=line_color, width=2), name='价格'), row=1, col=1)
-
+        fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'], mode='lines', fill='tozeroy', fillcolor=fill_color, line=dict(color=line_color, width=2), name='Price'), row=1, col=1)
+        
         # 2. 成交量
         colors = ['#008000' if c >= o else '#d91e18' for c, o in zip(hist['Close'], hist['Open'])]
-        fig.add_trace(go.Bar(x=hist.index, y=hist['Volume'], marker_color=colors, name='成交量'), row=2, col=1)
-
+        fig.add_trace(go.Bar(x=hist.index, y=hist['Volume'], marker_color=colors, name='Vol'), row=2, col=1)
+        
         # 3. MACD
         if macd is not None:
             fig.add_trace(go.Scatter(x=hist.index, y=macd.iloc[:, 0], line=dict(color='#2962FF', width=1), name='MACD'), row=3, col=1)
@@ -235,27 +245,21 @@ with col_chart:
             hist_colors = ['#26a69a' if h >= 0 else '#ef5350' for h in macd.iloc[:, 1]]
             fig.add_trace(go.Bar(x=hist.index, y=macd.iloc[:, 1], marker_color=hist_colors, name='Hist'), row=3, col=1)
 
-        # 关键修复：隐藏非交易时间 (Rangebreaks)
-        # 针对 1m, 5m, 15m, 30m, 60m 的数据，隐藏周末和美股盘后空白
+        # 隐藏非交易时间
         rangebreaks = []
         if st.session_state.interval in ['1m', '2m', '5m', '15m', '30m', '60m']:
-            rangebreaks.append(dict(bounds=["sat", "sun"])) # 隐藏周末
-            rangebreaks.append(dict(bounds=[16, 9.5], pattern="hour")) # 隐藏美股盘后 (16:00 - 09:30)
+            rangebreaks.append(dict(bounds=["sat", "sun"]))
+            rangebreaks.append(dict(bounds=[16, 9.5], pattern="hour"))
 
         fig.update_layout(
-            height=700,
-            margin=dict(l=10, r=10, t=10, b=10),
-            plot_bgcolor='white',
-            paper_bgcolor='white',
-            showlegend=False,
+            height=700, margin=dict(l=10, r=10, t=10, b=10),
+            plot_bgcolor='white', paper_bgcolor='white', showlegend=False,
             xaxis_rangeslider_visible=False,
             yaxis=dict(range=[y_min, y_max], gridcolor='#f0f0f0', side='right'),
             yaxis2=dict(gridcolor='#f0f0f0', side='right'),
             yaxis3=dict(gridcolor='#f0f0f0', side='right'),
             hovermode="x unified",
-            xaxis=dict(
-                rangebreaks=rangebreaks # 应用断点修复
-            )
+            xaxis=dict(rangebreaks=rangebreaks)
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -265,76 +269,76 @@ with col_chart:
     for item in news:
         st.markdown(f"- [{translate_text(item.get('title',''))}]({item.get('url','#')}) <span style='color:gray;font-size:12px'>{item.get('date','')[:10]}</span>", unsafe_allow_html=True)
 
-# --- 右侧：分析区 (重写买卖建议) ---
+# --- 右侧：修复后的分析区 ---
 with col_info:
     st.subheader("📊 交易决策")
     
     if not hist.empty:
         curr = hist['Close'].iloc[-1]
         
-        # 使用日线数据计算更准确的支撑阻力
-        # 防止分钟级数据波动太大导致误判
+        # 计算布林带
         bb = ta.bbands(hist['Close'], length=20, std=2.0)
         
         if bb is not None:
-            # 支撑位 (Lower Band)
-            support = bb.iloc[-1, 0]
-            # 阻力位 (Upper Band)
-            resis = bb.iloc[-1, 2]
+            support = bb.iloc[-1, 0] # Lower Band
+            resis = bb.iloc[-1, 2]   # Upper Band
         else:
             support = curr * 0.95
             resis = curr * 1.05
 
-        # 优化显示逻辑
-        st.markdown(f"""
+        # 🤖 AI 策略建议 (修复显示乱码问题)
+        # 这里的 HTML 结构被简化并确保渲染正确
+        strategy_html = f"""
         <div class="trade-panel">
             <h4>🤖 AI 策略建议</h4>
-            <div style="font-size:14px; color:#555; margin-bottom:10px;">基于布林带波动率模型</div>
+            <div style="font-size:13px; color:#666; margin-bottom:15px;">基于布林带波动率模型</div>
             
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                <span style="background-color:#ffebee; color:#c62828; padding:2px 6px; border-radius:4px; font-size:12px;">卖出目标</span>
-                <span class="neg-val" style="font-size:18px;">${resis:.2f}</span>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <span class="label-sell">阻力位 (Sell)</span>
+                <span class="price-down">${resis:.2f}</span>
             </div>
             
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; border-top:1px dashed #eee; border-bottom:1px dashed #eee; padding:5px 0;">
-                <span>当前价格</span>
-                <span style="font-weight:bold; font-size:16px;">${curr:.2f}</span>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; border-top:1px dashed #eee; border-bottom:1px dashed #eee; padding:8px 0;">
+                <span style="font-weight:600;">当前价格</span>
+                <span class="price-neutral">${curr:.2f}</span>
             </div>
             
             <div style="display:flex; justify-content:space-between; align-items:center;">
-                <span style="background-color:#e8f5e9; color:#2e7d32; padding:2px 6px; border-radius:4px; font-size:12px;">买入目标</span>
-                <span class="pos-val" style="font-size:18px;">${support:.2f}</span>
+                <span class="label-buy">支撑位 (Buy)</span>
+                <span class="price-up">${support:.2f}</span>
             </div>
         </div>
-        """, unsafe_allow_html=True)
+        """
+        st.markdown(strategy_html, unsafe_allow_html=True)
         
+        # 🏦 机构评级
         target = info.get('targetMeanPrice', 0)
         rating = info.get('recommendationKey', 'none').upper().replace('_', ' ')
         
-        st.markdown(f"""
+        rating_html = f"""
         <div class="trade-panel">
             <h4>🏦 机构观点</h4>
-            <div style="text-align:center; font-size:20px; font-weight:bold; color:#2962FF; margin:10px 0;">
+            <div style="text-align:center; font-size:20px; font-weight:800; color:#2962FF; margin:15px 0;">
                 {rating}
             </div>
             <div style="display:flex; justify-content:space-between; font-size:13px;">
                 <span>华尔街目标价:</span>
                 <strong>${target}</strong>
             </div>
-            <div style="margin-top:5px; font-size:12px; color:#666; text-align:center;">
-                (距离目标还有 {(target-curr)/curr*100:.1f}%)
-            </div>
         </div>
-        """, unsafe_allow_html=True)
+        """
+        st.markdown(rating_html, unsafe_allow_html=True)
         
-        st.markdown(f"""
+        # 📈 核心数据
+        data_html = f"""
         <div class="trade-panel">
-            <h4>📈 核心指标</h4>
-            <div style="font-size:13px; line-height:2;">
-                <div>市盈率 (PE): <strong>{info.get('trailingPE','N/A')}</strong></div>
-                <div>市值: <strong>{info.get('marketCap',0)/1e9:.1f}B</strong></div>
-                <div>52周高: <strong>{info.get('fiftyTwoWeekHigh','N/A')}</strong></div>
-                <div>做空比: <strong>{info.get('shortRatio','N/A')}</strong></div>
+            <h4>📈 核心数据</h4>
+            <div style="font-size:13px; line-height:2.2;">
+                <div style="display:flex; justify-content:space-between;"><span>市盈率 (PE):</span> <strong>{info.get('trailingPE','N/A')}</strong></div>
+                <div style="display:flex; justify-content:space-between;"><span>市值:</span> <strong>{info.get('marketCap',0)/1e9:.1f}B</strong></div>
+                <div style="display:flex; justify-content:space-between;"><span>52周高:</span> <strong>{info.get('fiftyTwoWeekHigh','N/A')}</strong></div>
+                <div style="display:flex; justify-content:space-between;"><span>做空比:</span> <strong>{info.get('shortRatio','N/A')}</strong></div>
             </div>
         </div>
-        """, unsafe_allow_html=True)
+        """
+        st.markdown(data_html, unsafe_allow_html=True)
