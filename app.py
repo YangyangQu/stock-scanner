@@ -12,7 +12,7 @@ from datetime import datetime
 # 1. 页面配置 & CSS
 # ==========================================
 st.set_page_config(
-    page_title="AI Pro 交易终端 (精准版)",
+    page_title="AI Pro 交易终端 (终极修正)",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -43,7 +43,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 数据逻辑
+# 2. 数据逻辑 (核心修复：乘以100)
 # ==========================================
 
 @st.cache_data(ttl=3600)
@@ -66,7 +66,7 @@ def get_nasdaq100_list():
 @st.cache_data(ttl=300)
 def scan_market_daily(tickers):
     """
-    修正逻辑：使用日线数据 (1d) 计算涨跌幅，确保与市场即时涨跌一致
+    修复：计算涨跌幅时乘以 100，解决显示 0.04% 的问题
     """
     data_list = []
     batch_size = 15
@@ -75,7 +75,7 @@ def scan_market_daily(tickers):
     for i in range(total_batches):
         batch = tickers[i*batch_size : (i+1)*batch_size]
         try:
-            # 下载过去1个月的日线数据
+            # 使用日线数据 (1d) 确保对比的是“昨收”
             df_batch = yf.download(batch, period="1mo", interval="1d", group_by='ticker', progress=False, threads=False)
             
             for ticker in batch:
@@ -86,23 +86,27 @@ def scan_market_daily(tickers):
                     df = df.dropna()
                     if len(df) < 5: continue
                     
-                    # 1. 价格与涨跌 (基于日线)
+                    # 1. 价格数据
                     curr = df['Close'].iloc[-1]
                     prev = df['Close'].iloc[-2]
-                    pct = ((curr - prev) / prev) # 这是标准的日涨跌幅
                     
-                    # 2. 趋势图 (取最近20天)
+                    # 2. 核心修复：乘以 100
+                    # 之前: (177 - 170)/170 = 0.041 -> 显示 0.04% (错)
+                    # 现在: ((177 - 170)/170) * 100 = 4.1 -> 显示 4.10% (对)
+                    pct = ((curr - prev) / prev) * 100 
+                    
+                    # 3. 走势
                     trend = df['Close'].tail(20).tolist()
                     
-                    # 3. 信号 (RSI)
+                    # 4. 信号
                     rsi = ta.rsi(df['Close'], length=14)
                     rsi_val = rsi.iloc[-1] if rsi is not None else 50
                     
                     signal = "⚪"
                     if rsi_val < 30: signal = "🔥抄底"
                     elif rsi_val > 75: signal = "⚠️止盈"
-                    elif pct > 0.03: signal = "🚀暴涨"
-                    elif pct < -0.03: signal = "📉暴跌"
+                    elif pct > 3.0: signal = "🚀暴涨" # 这里的阈值也要对应调整为 3.0 (即3%)
+                    elif pct < -3.0: signal = "📉暴跌"
                     
                     data_list.append({
                         "Symbol": ticker,
@@ -158,10 +162,10 @@ def get_advanced_data(ticker):
 # 3. 界面布局
 # ==========================================
 
-st.title("⚡ AI 量化全能终端 (精准版)")
+st.title("⚡ AI 量化全能终端 (修正版)")
 col_nav, col_chart, col_info = st.columns([2.5, 5.5, 2.0])
 
-# --- 左侧列表 (已修正幅度计算) ---
+# --- 左侧列表 ---
 with col_nav:
     st.subheader("全市场扫描")
     tickers = get_nasdaq100_list()
@@ -177,7 +181,7 @@ with col_nav:
                 "Symbol": st.column_config.TextColumn("代码", width="small"),
                 "Trend": st.column_config.LineChartColumn("走势", width="small", y_min=None, y_max=None),
                 "Price": st.column_config.NumberColumn("现价", format="$%.2f", width="small"),
-                "Chg": st.column_config.NumberColumn("幅%", format="%.2f%%", width="small"),
+                "Chg": st.column_config.NumberColumn("幅%", format="%.2f%%", width="small"), # 现在数值是 3.78，格式化后为 3.78%
                 "Signal": st.column_config.TextColumn("信号", width="small"),
             },
             use_container_width=True,
@@ -276,22 +280,20 @@ with col_chart:
             else: st.write("暂无财报日历数据")
         except: st.write("数据不可用")
 
-# --- 右侧：分析区 (修复：策略始终锚定日线) ---
+# --- 右侧：分析区 ---
 with col_info:
     st.subheader("📊 决策看板")
     
     if not hist.empty:
         curr = hist['Close'].iloc[-1]
         
-        # === 核心修正：单独拉取日线数据来计算策略，不受主图周期影响 ===
         try:
-            # 获取最近6个月的日线数据，保证策略的稳定性
             hist_daily, _, _ = get_detailed_history(selected_ticker, "6mo", "1d")
             if not hist_daily.empty:
                 bb = ta.bbands(hist_daily['Close'], length=20, std=2.0)
                 if bb is not None:
-                    support = bb.iloc[-1, 0] # Lower Band
-                    resis = bb.iloc[-1, 2]   # Upper Band
+                    support = bb.iloc[-1, 0]
+                    resis = bb.iloc[-1, 2]
                 else:
                     support = curr * 0.90
                     resis = curr * 1.10
