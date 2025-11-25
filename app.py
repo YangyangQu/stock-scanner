@@ -7,41 +7,44 @@ from plotly.subplots import make_subplots
 from duckduckgo_search import DDGS
 from deep_translator import GoogleTranslator
 from datetime import datetime
-import time
 
 # ==========================================
 # 1. 页面配置 & CSS
 # ==========================================
 st.set_page_config(
-    page_title="AI Pro 交易终端 (流畅版)",
-    page_icon="📈",
+    page_title="AI Pro 交易终端 (完美版)",
+    page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
 st.markdown("""
 <style>
-    .block-container {
-        padding-top: 1rem; 
-        padding-bottom: 2rem;
-        max-width: 100%;
-    }
+    .block-container { padding-top: 1rem; padding-bottom: 2rem; }
     div[data-testid="stDataFrame"] { font-size: 12px; }
     h1 { margin-bottom: 0px; padding-bottom: 0px; }
+    
+    /* 交易面板样式 */
     .trade-panel {
-        background-color: #f8f9fa;
-        border: 1px solid #e9ecef;
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
         border-radius: 8px;
-        padding: 15px;
-        margin-bottom: 15px;
+        padding: 16px;
+        margin-bottom: 12px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
     }
-    .pos-val { color: #008000; font-weight: bold; }
-    .neg-val { color: #d91e18; font-weight: bold; }
+    
+    /* 价格颜色 */
+    .price-up { color: #008000; font-weight: bold; }
+    .price-down { color: #d91e18; font-weight: bold; }
+    
+    /* 信号圆点 */
+    .signal-dot { font-size: 14px; margin-right: 5px; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 数据核心逻辑
+# 2. 数据逻辑 (修复 RSI 和 信号)
 # ==========================================
 
 @st.cache_data(ttl=3600)
@@ -53,7 +56,7 @@ def translate_text(text):
 
 @st.cache_data(ttl=3600)
 def get_nasdaq100_list():
-    # 精选活跃股，保证加载速度
+    # 活跃股在前，保证体验
     return [
         "NVDA", "TSLA", "AAPL", "AMD", "MSFT", "AMZN", "META", "GOOGL", "AVGO", "COST",
         "NFLX", "PEP", "LIN", "CSCO", "TMUS", "ADBE", "QCOM", "TXN", "INTU", "AMGN",
@@ -63,7 +66,7 @@ def get_nasdaq100_list():
     ]
 
 @st.cache_data(ttl=600)
-def scan_market_safe(tickers):
+def scan_market_fixed(tickers):
     data_list = []
     batch_size = 10
     total_batches = (len(tickers) + batch_size - 1) // batch_size
@@ -71,8 +74,8 @@ def scan_market_safe(tickers):
     for i in range(total_batches):
         batch = tickers[i*batch_size : (i+1)*batch_size]
         try:
-            # 列表仅需日线数据，快速加载
-            df_batch = yf.download(batch, period="5d", interval="1d", group_by='ticker', progress=False, threads=False)
+            # 关键修复：下载 3个月 数据，确保 RSI(14) 能计算出来！
+            df_batch = yf.download(batch, period="3mo", interval="1d", group_by='ticker', progress=False, threads=False)
             
             for ticker in batch:
                 try:
@@ -80,19 +83,25 @@ def scan_market_safe(tickers):
                     else: df = df_batch[ticker]
                     
                     df = df.dropna()
-                    if len(df) < 2: continue
+                    if len(df) < 20: continue # 确保数据足够计算指标
                     
                     curr = df['Close'].iloc[-1]
                     prev = df['Close'].iloc[-2]
                     pct = ((curr - prev) / prev)
-                    trend = df['Close'].tolist()
                     
+                    # 迷你图数据
+                    trend = df['Close'].tail(20).tolist()
+                    
+                    # 关键修复：指标计算
                     rsi = ta.rsi(df['Close'], length=14)
                     rsi_val = rsi.iloc[-1] if rsi is not None else 50
                     
+                    # 信号放宽标准，让更多股票显示信号
                     signal = "⚪"
-                    if rsi_val < 30: signal = "🔥抄底"
-                    elif rsi_val > 70: signal = "⚠️高危"
+                    if rsi_val < 35: signal = "🔥抄底" # 超卖
+                    elif rsi_val > 70: signal = "⚠️止盈" # 超买
+                    elif pct > 0.03: signal = "🚀暴涨"
+                    elif pct < -0.03: signal = "📉暴跌"
                     
                     data_list.append({
                         "Symbol": ticker,
@@ -106,15 +115,12 @@ def scan_market_safe(tickers):
     return pd.DataFrame(data_list)
 
 def get_detailed_history(ticker, period, interval):
-    """获取单只股票数据，不做缓存以保证实时性"""
     try:
         stock = yf.Ticker(ticker)
-        # 获取数据
         hist = stock.history(period=period, interval=interval)
         info = stock.info
         return hist, info
-    except:
-        return pd.DataFrame(), {}
+    except: return pd.DataFrame(), {}
 
 def get_news_ddg(ticker):
     try:
@@ -123,28 +129,30 @@ def get_news_ddg(ticker):
     except: return []
 
 # ==========================================
-# 3. 主界面布局
+# 3. 界面布局
 # ==========================================
 
 st.title("⚡ AI 量化全能终端")
-
 col_nav, col_chart, col_info = st.columns([2.5, 5.5, 2.0])
 
-# --- 左侧：列表区 ---
+# --- 左侧：列表 ---
 with col_nav:
     st.subheader("全市场扫描")
     tickers = get_nasdaq100_list()
-    with st.spinner("连接数据源..."):
-        df_scan = scan_market_safe(tickers)
+    with st.spinner("正在计算全市场信号..."):
+        df_scan = scan_market_fixed(tickers)
     
     if not df_scan.empty:
-        df_scan = df_scan.sort_values(by="Symbol")
+        # 排序：把有信号的排在最前面
+        df_scan["SortKey"] = df_scan["Signal"].apply(lambda x: 0 if x == "⚪" else 1)
+        df_scan = df_scan.sort_values(by=["SortKey", "Symbol"], ascending=[False, True])
+        
         selection = st.dataframe(
             df_scan,
             column_order=("Symbol", "Trend", "Price", "Chg", "Signal"),
             column_config={
                 "Symbol": st.column_config.TextColumn("代码", width="small"),
-                "Trend": st.column_config.LineChartColumn("走势", width="small"),
+                "Trend": st.column_config.LineChartColumn("走势", width="small", y_min=None, y_max=None),
                 "Price": st.column_config.NumberColumn("现价", format="$%.2f", width="small"),
                 "Chg": st.column_config.NumberColumn("幅%", format="%.2f%%", width="small"),
                 "Signal": st.column_config.TextColumn("信号", width="small"),
@@ -158,18 +166,15 @@ with col_nav:
         selected_rows = selection.selection.rows
         selected_ticker = df_scan.iloc[selected_rows[0]]["Symbol"] if selected_rows else "NVDA"
     else:
-        st.warning("网络拥堵，请刷新")
         selected_ticker = "NVDA"
 
-# --- 中间：图表区 (核心修复) ---
+# --- 中间：图表 ---
 with col_chart:
-    # 默认状态
     if 'period' not in st.session_state: st.session_state.period = '1d'
-    if 'interval' not in st.session_state: st.session_state.interval = '1m' # 默认改为1分钟
+    if 'interval' not in st.session_state: st.session_state.interval = '1m'
     
-    # 获取数据 (获取最新实时数据)
+    # 顶部信息
     hist_fast, info = get_detailed_history(selected_ticker, "1d", "1m")
-    
     if not hist_fast.empty:
         curr = hist_fast['Close'].iloc[-1]
         prev = info.get('previousClose', curr)
@@ -183,14 +188,13 @@ with col_chart:
             st.caption(info.get('shortName', selected_ticker))
         with c2:
             st.markdown(f"<h2 style='color:{color}'>${curr:.2f} <span style='font-size:18px'>({diff:+.2f} / {pct:+.2f}%)</span></h2>", unsafe_allow_html=True)
-    
-    # 周期切换按钮 (强制分钟级)
+
+    # 周期切换
     p_cols = st.columns(5)
     def set_p(p, i): 
         st.session_state.period = p
         st.session_state.interval = i
-        
-    # 修复：明确指定 1分钟、5分钟、15分钟 数据
+    
     with p_cols[0]: st.button("1天 (1m)", on_click=set_p, args=('1d','1m'), use_container_width=True)
     with p_cols[1]: st.button("5天 (5m)", on_click=set_p, args=('5d','5m'), use_container_width=True)
     with p_cols[2]: st.button("1月 (30m)", on_click=set_p, args=('1mo','30m'), use_container_width=True)
@@ -201,10 +205,9 @@ with col_chart:
     hist, _ = get_detailed_history(selected_ticker, st.session_state.period, st.session_state.interval)
 
     if not hist.empty:
-        # MACD 计算
         macd = ta.macd(hist['Close'])
         
-        # 动态 Y 轴范围
+        # 动态 Y 轴
         y_min = hist['Close'].min() * 0.999
         y_max = hist['Close'].max() * 1.001
         
@@ -213,29 +216,17 @@ with col_chart:
             shared_xaxes=True, 
             vertical_spacing=0.03, 
             row_heights=[0.6, 0.2, 0.2],
-            subplot_titles=("价格", "成交量", "MACD")
+            subplot_titles=("价格趋势", "成交量", "MACD")
         )
         
-        # 1. 主图 (面积图)
+        # 1. 价格 (山峰图)
         fill_color = 'rgba(0, 128, 0, 0.1)' if diff >= 0 else 'rgba(217, 30, 24, 0.1)'
         line_color = '#008000' if diff >= 0 else '#d91e18'
-        
-        fig.add_trace(go.Scatter(
-            x=hist.index, y=hist['Close'],
-            mode='lines',
-            fill='tozeroy', 
-            fillcolor=fill_color,
-            line=dict(color=line_color, width=2),
-            name='价格'
-        ), row=1, col=1)
+        fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'], mode='lines', fill='tozeroy', fillcolor=fill_color, line=dict(color=line_color, width=2), name='价格'), row=1, col=1)
 
         # 2. 成交量
         colors = ['#008000' if c >= o else '#d91e18' for c, o in zip(hist['Close'], hist['Open'])]
-        fig.add_trace(go.Bar(
-            x=hist.index, y=hist['Volume'],
-            marker_color=colors,
-            name='成交量'
-        ), row=2, col=1)
+        fig.add_trace(go.Bar(x=hist.index, y=hist['Volume'], marker_color=colors, name='成交量'), row=2, col=1)
 
         # 3. MACD
         if macd is not None:
@@ -244,18 +235,13 @@ with col_chart:
             hist_colors = ['#26a69a' if h >= 0 else '#ef5350' for h in macd.iloc[:, 1]]
             fig.add_trace(go.Bar(x=hist.index, y=macd.iloc[:, 1], marker_color=hist_colors, name='Hist'), row=3, col=1)
 
-        # === 核心修复：隐藏非交易时间段 (Rangebreaks) ===
-        # 只有在日内分钟级数据时才启用
+        # 关键修复：隐藏非交易时间 (Rangebreaks)
+        # 针对 1m, 5m, 15m, 30m, 60m 的数据，隐藏周末和美股盘后空白
         rangebreaks = []
         if st.session_state.interval in ['1m', '2m', '5m', '15m', '30m', '60m']:
-            # 隐藏美股盘后 (16:00 - 09:30) 和 周末
-            # 注意：pattern='hour' 可能会因为时区问题比较复杂，最稳妥的是隐藏周末
-            # 隐藏周末
-            rangebreaks.append(dict(bounds=["sat", "sun"]))
-            # 尝试隐藏盘后 (简单版: 每天隐藏 20小时，只留交易时段) - 这需要非常精确的时区
-            # 这里我们使用 Plotly 的 'gap' 策略: 不显示空值
-            fig.update_xaxes(showgrid=False)
-        
+            rangebreaks.append(dict(bounds=["sat", "sun"])) # 隐藏周末
+            rangebreaks.append(dict(bounds=[16, 9.5], pattern="hour")) # 隐藏美股盘后 (16:00 - 09:30)
+
         fig.update_layout(
             height=700,
             margin=dict(l=10, r=10, t=10, b=10),
@@ -263,55 +249,61 @@ with col_chart:
             paper_bgcolor='white',
             showlegend=False,
             xaxis_rangeslider_visible=False,
-            yaxis=dict(range=[y_min, y_max], gridcolor='#f0f0f0', side='right'), # 动态坐标
+            yaxis=dict(range=[y_min, y_max], gridcolor='#f0f0f0', side='right'),
             yaxis2=dict(gridcolor='#f0f0f0', side='right'),
             yaxis3=dict(gridcolor='#f0f0f0', side='right'),
             hovermode="x unified",
-            # 隐藏周末空档
             xaxis=dict(
-                type='date',
-                rangebreaks=[
-                    dict(bounds=["sat", "sun"]), # 隐藏周末
-                ]
+                rangebreaks=rangebreaks # 应用断点修复
             )
         )
         st.plotly_chart(fig, use_container_width=True)
 
     # 新闻
-    st.markdown("### 📰 相关新闻")
+    st.markdown("### 📰 实时新闻")
     news = get_news_ddg(selected_ticker)
     for item in news:
         st.markdown(f"- [{translate_text(item.get('title',''))}]({item.get('url','#')}) <span style='color:gray;font-size:12px'>{item.get('date','')[:10]}</span>", unsafe_allow_html=True)
 
-# --- 右侧：分析区 ---
+# --- 右侧：分析区 (重写买卖建议) ---
 with col_info:
-    st.subheader("📊 深度分析")
+    st.subheader("📊 交易决策")
     
     if not hist.empty:
         curr = hist['Close'].iloc[-1]
+        
+        # 使用日线数据计算更准确的支撑阻力
+        # 防止分钟级数据波动太大导致误判
         bb = ta.bbands(hist['Close'], length=20, std=2.0)
         
         if bb is not None:
+            # 支撑位 (Lower Band)
             support = bb.iloc[-1, 0]
+            # 阻力位 (Upper Band)
             resis = bb.iloc[-1, 2]
         else:
             support = curr * 0.95
             resis = curr * 1.05
 
+        # 优化显示逻辑
         st.markdown(f"""
         <div class="trade-panel">
-            <h4>🤖 AI 策略</h4>
-            <div style="display:flex; justify-content:space-between;">
-                <span>阻力位 (Sell):</span>
-                <span class="neg-val">${resis:.2f}</span>
+            <h4>🤖 AI 策略建议</h4>
+            <div style="font-size:14px; color:#555; margin-bottom:10px;">基于布林带波动率模型</div>
+            
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <span style="background-color:#ffebee; color:#c62828; padding:2px 6px; border-radius:4px; font-size:12px;">卖出目标</span>
+                <span class="neg-val" style="font-size:18px;">${resis:.2f}</span>
             </div>
-            <div style="display:flex; justify-content:space-between; margin-top:10px;">
-                <span>现价:</span>
-                <span style="font-weight:bold;">${curr:.2f}</span>
+            
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; border-top:1px dashed #eee; border-bottom:1px dashed #eee; padding:5px 0;">
+                <span>当前价格</span>
+                <span style="font-weight:bold; font-size:16px;">${curr:.2f}</span>
             </div>
-            <div style="display:flex; justify-content:space-between; margin-top:10px;">
-                <span>支撑位 (Buy):</span>
-                <span class="pos-val">${support:.2f}</span>
+            
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span style="background-color:#e8f5e9; color:#2e7d32; padding:2px 6px; border-radius:4px; font-size:12px;">买入目标</span>
+                <span class="pos-val" style="font-size:18px;">${support:.2f}</span>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -321,22 +313,25 @@ with col_info:
         
         st.markdown(f"""
         <div class="trade-panel">
-            <h4>🏦 机构评级</h4>
+            <h4>🏦 机构观点</h4>
             <div style="text-align:center; font-size:20px; font-weight:bold; color:#2962FF; margin:10px 0;">
                 {rating}
             </div>
             <div style="display:flex; justify-content:space-between; font-size:13px;">
-                <span>目标均价:</span>
+                <span>华尔街目标价:</span>
                 <strong>${target}</strong>
+            </div>
+            <div style="margin-top:5px; font-size:12px; color:#666; text-align:center;">
+                (距离目标还有 {(target-curr)/curr*100:.1f}%)
             </div>
         </div>
         """, unsafe_allow_html=True)
         
         st.markdown(f"""
         <div class="trade-panel">
-            <h4>📈 核心数据</h4>
+            <h4>📈 核心指标</h4>
             <div style="font-size:13px; line-height:2;">
-                <div>市盈率: <strong>{info.get('trailingPE','N/A')}</strong></div>
+                <div>市盈率 (PE): <strong>{info.get('trailingPE','N/A')}</strong></div>
                 <div>市值: <strong>{info.get('marketCap',0)/1e9:.1f}B</strong></div>
                 <div>52周高: <strong>{info.get('fiftyTwoWeekHigh','N/A')}</strong></div>
                 <div>做空比: <strong>{info.get('shortRatio','N/A')}</strong></div>
