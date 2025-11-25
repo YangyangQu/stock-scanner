@@ -9,10 +9,10 @@ from deep_translator import GoogleTranslator
 from datetime import datetime
 
 # ==========================================
-# 1. 页面配置 & CSS
+# 1. 页面配置
 # ==========================================
 st.set_page_config(
-    page_title="AI Pro 交易终端 (终极修正)",
+    page_title="AI Pro 交易终端 (决策版)",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -23,7 +23,6 @@ st.markdown("""
     .block-container { padding-top: 1rem; padding-bottom: 2rem; max-width: 100%; }
     div[data-testid="stDataFrame"] { font-size: 12px; }
     h1 { margin-bottom: 0px; padding-bottom: 0px; }
-    
     .trade-panel {
         background-color: #ffffff;
         border: 1px solid #e0e0e0;
@@ -32,18 +31,16 @@ st.markdown("""
         margin-bottom: 15px;
         box-shadow: 0 4px 6px rgba(0,0,0,0.04);
     }
-    
     .price-up { color: #008000; font-weight: 700; font-size: 18px; }
     .price-down { color: #d91e18; font-weight: 700; font-size: 18px; }
     .price-neutral { color: #333333; font-weight: 700; font-size: 16px; }
-    
     .label-buy { background-color: #e8f5e9; color: #2e7d32; padding: 4px 8px; border-radius: 4px; font-weight: 600; font-size: 12px; }
     .label-sell { background-color: #ffebee; color: #c62828; padding: 4px 8px; border-radius: 4px; font-weight: 600; font-size: 12px; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 数据逻辑 (核心修复：乘以100)
+# 2. 数据逻辑
 # ==========================================
 
 @st.cache_data(ttl=3600)
@@ -65,9 +62,6 @@ def get_nasdaq100_list():
 
 @st.cache_data(ttl=300)
 def scan_market_daily(tickers):
-    """
-    修复：计算涨跌幅时乘以 100，解决显示 0.04% 的问题
-    """
     data_list = []
     batch_size = 15
     total_batches = (len(tickers) + batch_size - 1) // batch_size
@@ -75,50 +69,30 @@ def scan_market_daily(tickers):
     for i in range(total_batches):
         batch = tickers[i*batch_size : (i+1)*batch_size]
         try:
-            # 使用日线数据 (1d) 确保对比的是“昨收”
             df_batch = yf.download(batch, period="1mo", interval="1d", group_by='ticker', progress=False, threads=False)
-            
             for ticker in batch:
                 try:
                     if len(batch) == 1: df = df_batch
                     else: df = df_batch[ticker]
-                    
                     df = df.dropna()
                     if len(df) < 5: continue
-                    
-                    # 1. 价格数据
                     curr = df['Close'].iloc[-1]
                     prev = df['Close'].iloc[-2]
-                    
-                    # 2. 核心修复：乘以 100
-                    # 之前: (177 - 170)/170 = 0.041 -> 显示 0.04% (错)
-                    # 现在: ((177 - 170)/170) * 100 = 4.1 -> 显示 4.10% (对)
                     pct = ((curr - prev) / prev) * 100 
-                    
-                    # 3. 走势
                     trend = df['Close'].tail(20).tolist()
-                    
-                    # 4. 信号
                     rsi = ta.rsi(df['Close'], length=14)
                     rsi_val = rsi.iloc[-1] if rsi is not None else 50
-                    
                     signal = "⚪"
                     if rsi_val < 30: signal = "🔥抄底"
                     elif rsi_val > 75: signal = "⚠️止盈"
-                    elif pct > 3.0: signal = "🚀暴涨" # 这里的阈值也要对应调整为 3.0 (即3%)
+                    elif pct > 3.0: signal = "🚀暴涨"
                     elif pct < -3.0: signal = "📉暴跌"
-                    
                     data_list.append({
-                        "Symbol": ticker,
-                        "Trend": trend,
-                        "Price": curr,
-                        "Chg": pct,
-                        "Signal": signal,
-                        "SortKey": abs(pct)
+                        "Symbol": ticker, "Trend": trend, "Price": curr,
+                        "Chg": pct, "Signal": signal, "SortKey": abs(pct)
                     })
                 except: continue
         except: continue
-        
     return pd.DataFrame(data_list)
 
 def get_detailed_history(ticker, period, interval):
@@ -149,29 +123,73 @@ def get_advanced_data(ticker):
                 pcr = round(puts_vol / calls_vol, 2)
     except: pass
     
-    insider = pd.DataFrame()
+    # --- 升级：高管交易分析 ---
+    insider_df = pd.DataFrame()
+    insider_sentiment = "中性 (Neutral)"
+    insider_color = "#333"
+    
     try:
         insider = stock.insider_transactions
         if insider is not None and not insider.empty:
-            insider = insider.head(5)[['Start Date', 'Insider', 'Text', 'Shares']]
+            # 简单的文本分析
+            # 提取最近 10 条交易
+            recent = insider.head(10)
+            buy_count = 0
+            sell_count = 0
+            
+            processed_data = []
+            
+            for index, row in recent.iterrows():
+                text = str(row['Text']).lower()
+                shares = row['Shares']
+                date = row['Start Date']
+                who = row['Insider']
+                
+                action = "未知"
+                if "sale" in text or "sold" in text:
+                    action = "🔴 减持 (卖出)"
+                    sell_count += 1
+                elif "purchase" in text or "buy" in text:
+                    action = "🟢 增持 (买入)"
+                    buy_count += 1
+                elif "grant" in text:
+                    action = "🎁 股权激励"
+                
+                processed_data.append({
+                    "日期": date,
+                    "高管": who,
+                    "操作": action,
+                    "股数": shares,
+                    "说明": row['Text']
+                })
+            
+            insider_df = pd.DataFrame(processed_data)
+            
+            # 生成建议
+            if sell_count > buy_count + 2:
+                insider_sentiment = "⚠️ 高管密集减持 (偏空)"
+                insider_color = "#d91e18"
+            elif buy_count > sell_count:
+                insider_sentiment = "🚀 高管正在买入 (偏多)"
+                insider_color = "#008000"
+            
     except: pass
     
-    return pcr, insider
+    return pcr, insider_df, insider_sentiment, insider_color
 
 # ==========================================
 # 3. 界面布局
 # ==========================================
 
-st.title("⚡ AI 量化全能终端 (修正版)")
+st.title("⚡ AI 量化全能终端 (机构版)")
 col_nav, col_chart, col_info = st.columns([2.5, 5.5, 2.0])
 
-# --- 左侧列表 ---
+# --- 左侧 ---
 with col_nav:
     st.subheader("全市场扫描")
     tickers = get_nasdaq100_list()
     with st.spinner("同步行情中..."):
         df_scan = scan_market_daily(tickers)
-    
     if not df_scan.empty:
         df_scan = df_scan.sort_values(by="SortKey", ascending=False)
         selection = st.dataframe(
@@ -181,27 +199,23 @@ with col_nav:
                 "Symbol": st.column_config.TextColumn("代码", width="small"),
                 "Trend": st.column_config.LineChartColumn("走势", width="small", y_min=None, y_max=None),
                 "Price": st.column_config.NumberColumn("现价", format="$%.2f", width="small"),
-                "Chg": st.column_config.NumberColumn("幅%", format="%.2f%%", width="small"), # 现在数值是 3.78，格式化后为 3.78%
+                "Chg": st.column_config.NumberColumn("幅%", format="%.2f%%", width="small"),
                 "Signal": st.column_config.TextColumn("信号", width="small"),
             },
-            use_container_width=True,
-            height=900,
-            hide_index=True,
-            selection_mode="single-row",
-            on_select="rerun"
+            use_container_width=True, height=900, hide_index=True, selection_mode="single-row", on_select="rerun"
         )
         selected_rows = selection.selection.rows
         selected_ticker = df_scan.iloc[selected_rows[0]]["Symbol"] if selected_rows else "NVDA"
-    else:
-        selected_ticker = "NVDA"
+    else: selected_ticker = "NVDA"
 
-# --- 中间图表 ---
+# --- 中间 ---
 with col_chart:
     if 'period' not in st.session_state: st.session_state.period = '1d'
     if 'interval' not in st.session_state: st.session_state.interval = '1m'
     
     hist_fast, info, stock_obj = get_detailed_history(selected_ticker, "1d", "1m")
-    pcr_val, insider_df = get_advanced_data(selected_ticker)
+    # 获取升级版数据
+    pcr_val, insider_df, sentiment_text, sentiment_color = get_advanced_data(selected_ticker)
     
     if not hist_fast.empty:
         curr = hist_fast['Close'].iloc[-1]
@@ -209,7 +223,6 @@ with col_chart:
         diff = curr - prev
         pct = (diff / prev) * 100
         color = "green" if diff >= 0 else "red"
-        
         c1, c2 = st.columns([2, 4])
         with c1:
             st.markdown(f"## {selected_ticker}")
@@ -218,10 +231,7 @@ with col_chart:
             st.markdown(f"<h2 style='color:{color}'>${curr:.2f} <span style='font-size:18px'>({diff:+.2f} / {pct:+.2f}%)</span></h2>", unsafe_allow_html=True)
     
     p_cols = st.columns(5)
-    def set_p(p, i): 
-        st.session_state.period = p
-        st.session_state.interval = i
-    
+    def set_p(p, i): st.session_state.period = p; st.session_state.interval = i
     with p_cols[0]: st.button("1天 (1m)", on_click=set_p, args=('1d','1m'), use_container_width=True)
     with p_cols[1]: st.button("5天 (5m)", on_click=set_p, args=('5d','5m'), use_container_width=True)
     with p_cols[2]: st.button("1月 (30m)", on_click=set_p, args=('1mo','30m'), use_container_width=True)
@@ -229,85 +239,75 @@ with col_chart:
     with p_cols[4]: st.button("周线", on_click=set_p, args=('2y','1wk'), use_container_width=True)
 
     hist, _, _ = get_detailed_history(selected_ticker, st.session_state.period, st.session_state.interval)
-    
     if not hist.empty:
         macd = ta.macd(hist['Close'])
-        y_min = hist['Close'].min() * 0.999
-        y_max = hist['Close'].max() * 1.001
-        
+        y_min = hist['Close'].min() * 0.999; y_max = hist['Close'].max() * 1.001
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.6, 0.2, 0.2], subplot_titles=("价格", "成交量", "MACD"))
-        
         fill_color = 'rgba(0, 128, 0, 0.1)' if diff >= 0 else 'rgba(217, 30, 24, 0.1)'
         line_color = '#008000' if diff >= 0 else '#d91e18'
         fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'], mode='lines', fill='tozeroy', fillcolor=fill_color, line=dict(color=line_color, width=2), name='Price'), row=1, col=1)
-        
         colors = ['#008000' if c >= o else '#d91e18' for c, o in zip(hist['Close'], hist['Open'])]
         fig.add_trace(go.Bar(x=hist.index, y=hist['Volume'], marker_color=colors, name='Vol'), row=2, col=1)
-        
         if macd is not None:
             fig.add_trace(go.Scatter(x=hist.index, y=macd.iloc[:, 0], line=dict(color='#2962FF', width=1), name='MACD'), row=3, col=1)
             fig.add_trace(go.Scatter(x=hist.index, y=macd.iloc[:, 2], line=dict(color='#FF6D00', width=1), name='Signal'), row=3, col=1)
             hist_colors = ['#26a69a' if h >= 0 else '#ef5350' for h in macd.iloc[:, 1]]
             fig.add_trace(go.Bar(x=hist.index, y=macd.iloc[:, 1], marker_color=hist_colors, name='Hist'), row=3, col=1)
-
         rangebreaks = []
         if st.session_state.interval in ['1m', '2m', '5m', '15m', '30m', '60m']:
             rangebreaks.append(dict(bounds=["sat", "sun"]))
             rangebreaks.append(dict(bounds=[16, 9.5], pattern="hour"))
-
         fig.update_layout(height=650, margin=dict(l=10, r=10, t=10, b=10), plot_bgcolor='white', paper_bgcolor='white', showlegend=False, xaxis_rangeslider_visible=False, yaxis=dict(range=[y_min, y_max], gridcolor='#f0f0f0', side='right'), yaxis2=dict(gridcolor='#f0f0f0', side='right'), yaxis3=dict(gridcolor='#f0f0f0', side='right'), hovermode="x unified", xaxis=dict(rangebreaks=rangebreaks))
         st.plotly_chart(fig, use_container_width=True)
 
-    tab1, tab2, tab3 = st.tabs(["📰 实时新闻", "💼 高管交易", "📅 财报信息"])
-    
+    # --- 底部 Tabs (高管交易升级) ---
+    tab1, tab2, tab3 = st.tabs(["📰 实时新闻", "💼 高管交易分析", "📅 财报信息"])
     with tab1:
         news = get_news_ddg(selected_ticker)
         for item in news:
             st.markdown(f"- [{translate_text(item.get('title',''))}]({item.get('url','#')}) <span style='color:gray;font-size:12px'>{item.get('date','')[:10]}</span>", unsafe_allow_html=True)
-
+    
     with tab2:
+        # 直接展示分析结果
+        st.markdown(f"#### 📊 AI 分析结论: <span style='color:{sentiment_color}'>{sentiment_text}</span>", unsafe_allow_html=True)
         if not insider_df.empty:
-            st.dataframe(insider_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("近期无高管交易记录")
-
+            st.dataframe(
+                insider_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "操作": st.column_config.TextColumn("操作", width="small"),
+                    "股数": st.column_config.NumberColumn("股数", format="%d"),
+                }
+            )
+        else: st.info("近期无公开的高管交易记录")
+    
     with tab3:
         try:
             calendar = stock_obj.calendar
             if calendar and 'Earnings Date' in calendar:
                 earnings_date = calendar['Earnings Date'][0]
                 st.metric("下一次财报日", f"{earnings_date}")
-            else: st.write("暂无财报日历数据")
+            else: st.write("暂无数据")
         except: st.write("数据不可用")
 
-# --- 右侧：分析区 ---
+# --- 右侧 ---
 with col_info:
     st.subheader("📊 决策看板")
-    
     if not hist.empty:
         curr = hist['Close'].iloc[-1]
-        
         try:
             hist_daily, _, _ = get_detailed_history(selected_ticker, "6mo", "1d")
             if not hist_daily.empty:
                 bb = ta.bbands(hist_daily['Close'], length=20, std=2.0)
-                if bb is not None:
-                    support = bb.iloc[-1, 0]
-                    resis = bb.iloc[-1, 2]
-                else:
-                    support = curr * 0.90
-                    resis = curr * 1.10
-            else:
-                support = curr * 0.90
-                resis = curr * 1.10
-        except:
-            support = curr * 0.90
-            resis = curr * 1.10
+                support = bb.iloc[-1, 0]; resis = bb.iloc[-1, 2]
+            else: support = curr*0.9; resis = curr*1.1
+        except: support = curr*0.9; resis = curr*1.1
 
         st.markdown(f"""
 <div class="trade-panel">
 <h4>🤖 AI 策略建议</h4>
-<div style="font-size:13px; color:#666; margin-bottom:15px;">基于日线布林带模型 (中短线)</div>
+<div style="font-size:13px; color:#666; margin-bottom:15px;">基于日线布林带模型</div>
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
 <span class="label-sell">阻力位 (Sell)</span>
 <span class="price-down">${resis:.2f}</span>
@@ -325,8 +325,7 @@ with col_info:
         
         short_float = info.get('shortPercentOfFloat', 0)
         short_val = f"{short_float*100:.2f}%" if short_float else "N/A"
-        pcr_color = "#333"
-        pcr_text = str(pcr_val)
+        pcr_color = "#333"; pcr_text = str(pcr_val)
         if pcr_val != "N/A":
             if pcr_val > 1.0: pcr_color = "#d91e18" 
             elif pcr_val < 0.7: pcr_color = "#008000" 
@@ -349,7 +348,6 @@ with col_info:
         
         target = info.get('targetMeanPrice', 0)
         rating = info.get('recommendationKey', 'none').upper().replace('_', ' ')
-        
         st.markdown(f"""
 <div class="trade-panel">
 <h4>🏦 机构观点</h4>
