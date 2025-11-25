@@ -11,7 +11,7 @@ from datetime import datetime
 # ==========================================
 st.set_page_config(
     page_title="AI 量化决策终端",
-    page_icon="🤖",
+    page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -25,7 +25,6 @@ st.markdown("""
         border-radius: 8px;
         border: 1px solid #e9ecef;
     }
-    /* 交易计划卡片样式 */
     .trade-card {
         background-color: #e3f2fd;
         padding: 15px;
@@ -44,14 +43,12 @@ st.markdown("""
 # 2. 核心功能函数
 # ==========================================
 
-# 翻译函数 (带缓存，防止重复请求)
 @st.cache_data(ttl=3600)
 def translate_text(text):
     try:
-        # 使用 Google 翻译接口
         return GoogleTranslator(source='auto', target='zh-CN').translate(text)
     except:
-        return text # 如果失败返回原文
+        return text 
 
 @st.cache_data(ttl=300)
 def get_nasdaq100_list():
@@ -75,11 +72,19 @@ def scan_market(tickers):
         df_data = yf.download(tickers, period="1mo", group_by='ticker', progress=False, threads=True)
         for ticker in tickers:
             try:
-                df = df_data[ticker].dropna()
+                # 兼容 yfinance 不同版本的数据结构
+                if len(tickers) == 1:
+                    df = df_data
+                else:
+                    df = df_data[ticker]
+                
+                df = df.dropna()
                 if len(df) < 20: continue
                 
                 curr = df['Close'].iloc[-1]
-                pct = ((curr - df['Close'].iloc[-2]) / df['Close'].iloc[-2]) * 100
+                prev = df['Close'].iloc[-2]
+                pct = ((curr - prev) / prev) * 100
+                
                 rsi = df.ta.rsi(length=14).iloc[-1]
                 mfi = df.ta.mfi(length=14).iloc[-1]
                 
@@ -110,40 +115,37 @@ def get_stock_detail(ticker):
     return info, hist, news
 
 # ==========================================
-# 3. 策略计算逻辑 (AI Trading Plan)
+# 3. 策略计算逻辑
 # ==========================================
 def calculate_trade_plan(df):
-    """
-    根据技术指标自动计算交易点位
-    """
     current_price = df['Close'].iloc[-1]
     
-    # 1. 计算布林带 (作为支撑阻力)
+    # 修复点：显式计算并合并布林带，不依赖 append=True
     bb = df.ta.bbands(length=20, std=2.0)
-    lower_band = bb.iloc[-1, 0]
-    upper_band = bb.iloc[-1, 2]
-    mid_band = bb.iloc[-1, 1]
+    if bb is not None:
+        # 动态获取列名（避免 Key Error）
+        lower_col = bb.columns[0] # 通常第一列是下轨
+        upper_col = bb.columns[2] # 第三列是上轨
+        lower_band = bb[lower_col].iloc[-1]
+        upper_band = bb[upper_col].iloc[-1]
+    else:
+        lower_band = current_price * 0.95
+        upper_band = current_price * 1.05
     
-    # 2. 计算 ATR (波动率，用于止损)
-    atr = df.ta.atr(length=14).iloc[-1]
+    atr_series = df.ta.atr(length=14)
+    atr = atr_series.iloc[-1] if atr_series is not None else current_price * 0.02
     
-    # 3. 策略逻辑
-    # 建议买入价：如果是上升趋势，回踩中轨买；如果是震荡/下跌，下轨买。
-    # 简化逻辑：偏保守，建议在 Current Price 和 Lower Band 之间
+    # 策略逻辑
     if current_price < lower_band:
-        buy_price = current_price # 已经超跌，现价即买点
+        buy_price = current_price 
         strategy_text = "极度超卖 (Oversold)"
     else:
-        # 挂单逻辑：在支撑位附近
         buy_price = max(lower_band, current_price - (atr * 0.5))
         strategy_text = "回踩支撑 (Dip Buy)"
 
-    # 止损价：买入价 - 2倍 ATR (留足波动空间)
     stop_loss = buy_price - (atr * 2)
-    
-    # 止盈价：布林上轨 或 风险回报比 1:2
     take_profit = buy_price + (buy_price - stop_loss) * 2
-    if take_profit > upper_band * 1.1: # 如果目标太高，就设在上轨
+    if take_profit > upper_band * 1.1:
         take_profit = upper_band
         
     return {
@@ -193,7 +195,7 @@ with col_detail:
             prev = info.get('previousClose', hist['Close'].iloc[-2])
             st.metric("现价", f"${price}", f"{price-prev:.2f}")
 
-        # 2. 🤖 AI 交易计划 (新功能)
+        # 2. 🤖 AI 交易计划
         plan = calculate_trade_plan(hist)
         
         st.markdown(f"""
@@ -210,21 +212,35 @@ with col_detail:
         </div>
         """, unsafe_allow_html=True)
 
-        # 3. K线图
-        hist.ta.bbands(length=20, std=2.0, append=True)
+        # 3. K线图 (修复 Key Error 的核心部分)
+        # 手动计算布林带并合并，不再依赖自动 append
+        bb_df = hist.ta.bbands(length=20, std=2.0)
+        if bb_df is not None:
+            # 获取动态列名
+            bbl_col = bb_df.columns[0] # Lower
+            bbu_col = bb_df.columns[2] # Upper
+            # 合并数据
+            hist = pd.concat([hist, bb_df], axis=1)
+        else:
+            bbl_col = bbu_col = None
+
         fig = go.Figure()
         fig.add_trace(go.Candlestick(
             x=hist.index, open=hist['Open'], high=hist['High'],
             low=hist['Low'], close=hist['Close'], name='K线'
         ))
-        fig.add_trace(go.Scatter(
-            x=hist.index, y=hist['BBL_20_2.0'], 
-            line=dict(color='orange', width=1), name='布林下轨'
-        ))
-        fig.add_trace(go.Scatter(
-            x=hist.index, y=hist['BBU_20_2.0'], 
-            line=dict(color='blue', width=1), name='布林上轨'
-        ))
+        
+        # 只有当布林带计算成功时才画线
+        if bbl_col:
+            fig.add_trace(go.Scatter(
+                x=hist.index, y=hist[bbl_col], 
+                line=dict(color='orange', width=1), name='布林下轨'
+            ))
+            fig.add_trace(go.Scatter(
+                x=hist.index, y=hist[bbu_col], 
+                line=dict(color='blue', width=1), name='布林上轨'
+            ))
+
         # 标记 AI 建议点位
         fig.add_hline(y=plan['buy'], line_dash="dash", line_color="blue", annotation_text="Buy")
         fig.add_hline(y=plan['stop'], line_dash="dash", line_color="red", annotation_text="Stop")
@@ -238,34 +254,36 @@ with col_detail:
         m3.metric("机构持仓", f"{round(info.get('heldPercentInstitutions', 0)*100, 1)}%")
         m4.metric("做空比率", f"{round(info.get('shortRatio', 0), 2)}")
 
-        # 5. 📰 中文新闻解读 (新功能)
+        # 5. 📰 中文新闻解读
         st.subheader("📰 最新动态 (AI 翻译)")
         with st.spinner("正在翻译最新新闻..."):
             count = 0
-            for item in news_list:
-                if count >= 5: break # 只显示前5条，防止翻译太慢
-                
-                # 获取原标题和链接
-                title_en = item.get('title', 'No Title')
-                link = item.get('link', '#')
-                publisher = item.get('publisher', 'Unknown')
-                pub_time = datetime.fromtimestamp(item.get('providerPublishTime', 0)).strftime('%Y-%m-%d %H:%M')
-                
-                # 调用翻译
-                title_zh = translate_text(title_en)
-                
-                st.markdown(f"""
-                <div class="news-card">
-                    <a href="{link}" target="_blank" style="text-decoration: none; color: #333;">
-                        <strong>{title_zh}</strong>
-                    </a>
-                    <div style="font-size: 12px; color: #888; margin-top: 4px;">
-                        📅 {pub_time} | 来源: {publisher} <br>
-                        <span style="color: #aaa;">(原文: {title_en})</span>
+            if news_list:
+                for item in news_list:
+                    if count >= 5: break 
+                    
+                    title_en = item.get('title', 'No Title')
+                    link = item.get('link', '#')
+                    publisher = item.get('publisher', 'Unknown')
+                    pub_time = datetime.fromtimestamp(item.get('providerPublishTime', 0)).strftime('%Y-%m-%d %H:%M')
+                    
+                    # 调用翻译
+                    title_zh = translate_text(title_en)
+                    
+                    st.markdown(f"""
+                    <div class="news-card">
+                        <a href="{link}" target="_blank" style="text-decoration: none; color: #333;">
+                            <strong>{title_zh}</strong>
+                        </a>
+                        <div style="font-size: 12px; color: #888; margin-top: 4px;">
+                            📅 {pub_time} | 来源: {publisher} <br>
+                            <span style="color: #aaa;">(原文: {title_en})</span>
+                        </div>
                     </div>
-                </div>
-                """, unsafe_allow_html=True)
-                count += 1
+                    """, unsafe_allow_html=True)
+                    count += 1
+            else:
+                st.info("暂无最新新闻。")
 
     else:
         st.info("👈 请点击左侧股票代码，生成 AI 交易报告。")
