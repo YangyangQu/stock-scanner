@@ -8,47 +8,37 @@ from deep_translator import GoogleTranslator
 from datetime import datetime
 
 # ==========================================
-# 1. 页面极简配置
+# 1. 页面配置
 # ==========================================
 st.set_page_config(
-    page_title="AI 量化终端 Pro",
+    page_title="AI 量化终端 Pro Max",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# 注入 CSS：去除表格原本的“Excel感”，让它像一个 App 列表
+# 注入 CSS：极致美化
 st.markdown("""
 <style>
-    /* 隐藏默认的顶部内边距 */
-    .block-container {padding-top: 1rem; padding-bottom: 2rem;}
+    .block-container {padding-top: 0.5rem; padding-bottom: 2rem;}
     
-    /* 左侧列表美化 */
+    /* 侧边栏列表优化 */
     div[data-testid="stDataFrame"] {
-        border: none !important;
+        font-size: 13px;
     }
     
-    /* 指标卡片美化 */
+    /* 指标卡片 */
     div[data-testid="stMetric"] {
-        background-color: #ffffff;
-        border: 1px solid #f0f2f6;
-        border-radius: 10px;
-        padding: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        background-color: #fff;
+        border: 1px solid #eee;
+        border-radius: 8px;
+        padding: 8px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
     
-    /* 选中行的高亮样式优化 */
-    .stDataFrame {
-        font-family: 'Inter', sans-serif;
-    }
-    
-    /* K线图容器背景 */
-    .chart-container {
-        background: white;
-        border-radius: 12px;
-        padding: 10px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-        margin-bottom: 20px;
+    /* 加载条颜色 */
+    .stProgress > div > div > div > div {
+        background-color: #ffbd45;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -67,61 +57,83 @@ def translate_text(text):
 
 @st.cache_data(ttl=300)
 def get_nasdaq100_list():
+    # 完整 100 只列表
     return [
-        "AAPL", "MSFT", "NVDA", "AVGO", "AMZN", "META", "TSLA", "GOOGL", "GOOG", "COST",
-        "NFLX", "AMD", "PEP", "LIN", "CSCO", "TMUS", "ADBE", "QCOM", "TXN", "INTU",
-        "AMGN", "ISRG", "CMCSA", "HON", "BKNG", "AMAT", "KKR", "VRTX", "SBUX", "PANW",
-        "MU", "ADP", "PDD", "GILD", "INTC", "LRCX", "ADI", "MELI", "MDLZ", "CTAS",
-        "REGN", "KLAC", "CRWD", "SNPS", "SHW", "PYPL", "MAR", "CDNS", "CSX", "ORLY",
-        "ASML", "NXPI", "CEG", "MNST", "DASH", "ROP", "FTNT", "PCAR", "CHTR", "ABNB",
-        "AEP", "CPRT", "DXCM", "MCHP", "ROST", "PAYX", "FAST", "CTSH", "ODFL", "KDP",
-        "IDXX", "EA", "EXC", "VRSK", "GEHC", "XEL", "AZN", "BKR", "GFS", "LULU",
-        "TTD", "FANG", "WBD", "CSGP", "MRVL", "BIIB", "TEAM", "ILMN", "DDOG", "ZS",
-        "ON", "MDB", "ANSS", "DLTR", "WBA", "SIRI", "ZM", "ENPH", "JD", "LCID"
+        "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "AVGO", "COST",
+        "NFLX", "PEP", "LIN", "CSCO", "TMUS", "ADBE", "QCOM", "TXN", "INTU", "AMGN",
+        "ISRG", "CMCSA", "HON", "BKNG", "AMAT", "KKR", "VRTX", "SBUX", "PANW", "MU",
+        "ADP", "PDD", "GILD", "INTC", "LRCX", "ADI", "MELI", "MDLZ", "CTAS", "REGN",
+        "KLAC", "CRWD", "SNPS", "SHW", "PYPL", "MAR", "CDNS", "CSX", "ORLY", "ASML",
+        "NXPI", "CEG", "MNST", "DASH", "ROP", "FTNT", "PCAR", "CHTR", "ABNB", "AEP",
+        "CPRT", "DXCM", "MCHP", "ROST", "PAYX", "FAST", "CTSH", "ODFL", "KDP", "IDXX",
+        "EA", "EXC", "VRSK", "GEHC", "XEL", "AZN", "BKR", "GFS", "LULU", "TTD", "FANG",
+        "WBD", "CSGP", "MRVL", "BIIB", "TEAM", "ILMN", "DDOG", "ZS", "ON", "MDB",
+        "ANSS", "DLTR", "WBA", "SIRI", "ZM", "ENPH", "JD", "LCID"
     ]
 
-@st.cache_data(ttl=60)
-def scan_market(tickers):
+@st.cache_data(ttl=300)
+def scan_market_detailed(tickers):
     data_list = []
+    
+    # 批量下载数据 (1个月数据，用于计算指标和画迷你图)
+    # 使用 threads=True 加速
     try:
-        # 只拉取最后两天数据做快速扫描
-        df_data = yf.download(tickers, period="5d", group_by='ticker', progress=False, threads=True)
-        for ticker in tickers:
-            try:
-                if len(tickers) == 1: df = df_data
-                else: df = df_data[ticker]
-                
-                df = df.dropna()
-                if len(df) < 5: continue
-                
-                curr = df['Close'].iloc[-1]
-                prev = df['Close'].iloc[-2]
-                pct = ((curr - prev) / prev)
-                
-                rsi = df.ta.rsi(length=14).iloc[-1]
-                mfi = df.ta.mfi(length=14).iloc[-1]
-                
-                # 信号判断
-                status = "⚪ 观望"
-                if rsi < 35 or mfi < 25: status = "🔥 极佳"
-                elif rsi > 70: status = "⚠️ 风险"
-                elif pct > 0.03: status = "🚀 异动"
-                
-                data_list.append({
-                    "Symbol": ticker,
-                    "Price": curr,
-                    "Chg%": pct,
-                    "Signal": status,
-                    "RSI": rsi # 用于排序，不一定显示
-                })
-            except: continue
-    except: return pd.DataFrame()
+        df_data = yf.download(tickers, period="1mo", group_by='ticker', progress=False, threads=True)
+    except:
+        return pd.DataFrame()
+
+    for ticker in tickers:
+        try:
+            # 提取单只股票
+            if len(tickers) == 1: df = df_data
+            else: df = df_data[ticker]
+            
+            df = df.dropna()
+            if len(df) < 20: continue
+            
+            # 1. 基础价格
+            curr = df['Close'].iloc[-1]
+            prev = df['Close'].iloc[-2]
+            pct = ((curr - prev) / prev)
+            
+            # 2. 技术指标
+            rsi = df.ta.rsi(length=14).iloc[-1]
+            mfi = df.ta.mfi(length=14).iloc[-1]
+            
+            # MACD
+            macd = df.ta.macd(fast=12, slow=26, signal=9)
+            macd_diff = macd.iloc[-1, 1] # Histogram
+            macd_signal = "🟢金叉" if macd_diff > 0 else "🔴死叉"
+            
+            # 3. 迷你走势图数据 (Sparkline)
+            # 取最近 20 天的收盘价，转为列表
+            trend_data = df['Close'].tail(20).tolist()
+            
+            # 4. 评级信号
+            signal = "⚪"
+            if rsi < 35 or mfi < 25: signal = "🔥买入"
+            elif rsi > 75: signal = "⚠️超买"
+            elif pct > 0.03: signal = "🚀暴涨"
+            
+            # 5. 成交量
+            vol = df['Volume'].iloc[-1]
+            vol_str = f"{vol/1e6:.1f}M"
+
+            data_list.append({
+                "Symbol": ticker,
+                "Trend": trend_data, # 这里的列表会被渲染成曲线图
+                "Price": curr,
+                "Chg": pct,
+                "Signal": signal,
+                "MACD": macd_signal,
+                "Vol": vol_str,
+                "RSI_Num": rsi # 用于排序的隐藏列
+            })
+        except: continue
+        
     return pd.DataFrame(data_list)
 
 def get_stock_data_by_timeframe(ticker, interval, period):
-    """
-    根据选择的时间周期获取数据
-    """
     stock = yf.Ticker(ticker)
     info = stock.info
     hist = stock.history(period=period, interval=interval)
@@ -139,44 +151,47 @@ def get_news_ddg(ticker):
 
 st.title("⚡ AI 量化交易终端")
 
-# 布局：左侧 1/4 为列表，右侧 3/4 为详情
-col_nav, col_main = st.columns([1, 3])
+# 布局：左侧列表 (35%)，右侧详情 (65%)
+col_nav, col_main = st.columns([3.5, 6.5])
 
-# --- 左侧：美化后的关注列表 ---
+# --- 左侧：超级列表 (The Super List) ---
 with col_nav:
-    st.subheader("🔍 市场扫描")
+    st.subheader("🔍 市场全景 (Nasdaq 100)")
     
-    # 搜索框
-    search_term = st.text_input("搜索代码", placeholder="如 NVDA...", label_visibility="collapsed")
-    
-    # 获取数据
-    tickers = get_nasdaq100_list()
-    df_scan = scan_market(tickers)
+    with st.spinner("正在加载 100 只股票实时数据..."):
+        tickers = get_nasdaq100_list()
+        df_scan = scan_market_detailed(tickers)
     
     if not df_scan.empty:
-        # 排序：信号好的排前面
-        df_scan = df_scan.sort_values(by=["Signal", "RSI"], ascending=[True, True])
+        # 默认按是否有信号排序，然后按代码排
+        df_scan = df_scan.sort_values(by=["Signal", "Symbol"], ascending=[False, True])
         
-        # 搜索过滤
-        if search_term:
-            df_scan = df_scan[df_scan['Symbol'].str.contains(search_term.upper())]
-
-        # 🎨 使用 column_config 美化表格，让它看起来不像 Excel
+        # ⚡ 核心组件：配置超级表格
         selection = st.dataframe(
             df_scan,
-            column_order=("Symbol", "Price", "Chg%", "Signal"), # 只显示这几列
+            column_order=("Symbol", "Trend", "Price", "Chg", "Signal", "MACD", "Vol"),
             column_config={
                 "Symbol": st.column_config.TextColumn("代码", width="small"),
+                
+                # 🔥 迷你走势图配置 (Sparkline)
+                "Trend": st.column_config.LineChartColumn(
+                    "近20日走势",
+                    width="medium",
+                    y_min=None, y_max=None, # 自动缩放
+                ),
+                
                 "Price": st.column_config.NumberColumn("现价", format="$%.2f", width="small"),
-                "Chg%": st.column_config.NumberColumn(
+                "Chg": st.column_config.NumberColumn(
                     "涨跌", 
                     format="%.2f%%", 
                     width="small",
                 ),
-                "Signal": st.column_config.TextColumn("信号", width="medium"),
+                "Signal": st.column_config.TextColumn("评级", width="small"),
+                "MACD": st.column_config.TextColumn("MACD", width="small"),
+                "Vol": st.column_config.TextColumn("量", width="small"),
             },
             use_container_width=True,
-            height=700,
+            height=850, # 足够高以显示更多股票
             hide_index=True,
             selection_mode="single-row",
             on_select="rerun"
@@ -186,131 +201,85 @@ with col_nav:
         if selected_rows:
             selected_ticker = df_scan.iloc[selected_rows[0]]["Symbol"]
         else:
-            selected_ticker = "NVDA" # 默认显示
+            selected_ticker = "NVDA"
     else:
-        st.write("数据加载中...")
+        st.error("数据加载失败")
         selected_ticker = "NVDA"
 
-# --- 右侧：深度分析与走势 ---
+# --- 右侧：深度详情 ---
 with col_main:
-    # 1. 顶部：时间周期选择器 (关键更新!)
-    c_header, c_timeframe = st.columns([2, 2])
-    
-    with c_header:
+    # 顶部工具栏
+    c1, c2 = st.columns([1, 1])
+    with c1:
         st.markdown(f"## {selected_ticker}")
-    
-    with c_timeframe:
-        # 🔘 时间周期切换按钮
-        timeframe = st.radio(
-            "选择周期:",
-            ["15分钟", "1小时", "日线", "周线"],
-            horizontal=True,
-            label_visibility="collapsed"
-        )
-        
-        # 映射逻辑
+    with c2:
+        timeframe = st.radio("周期", ["15分钟", "1小时", "日线", "周线"], horizontal=True)
         tf_map = {
             "15分钟": {"interval": "15m", "period": "5d"},
             "1小时": {"interval": "60m", "period": "1mo"},
             "日线": {"interval": "1d", "period": "6mo"},
             "周线": {"interval": "1wk", "period": "2y"}
         }
-        params = tf_map[timeframe]
 
-    # 获取详细数据
+    # 获取数据
+    params = tf_map[timeframe]
     info, hist = get_stock_data_by_timeframe(selected_ticker, params['interval'], params['period'])
 
-    # 2. 核心指标栏
-    m1, m2, m3, m4, m5 = st.columns(5)
-    
-    curr_price = hist['Close'].iloc[-1]
-    prev_price = hist['Close'].iloc[-2]
-    chg = curr_price - prev_price
-    chg_pct = (chg / prev_price) * 100
-    
-    m1.metric("最新价", f"${curr_price:.2f}", f"{chg:.2f} ({chg_pct:.2f}%)")
-    m2.metric("成交量", f"{hist['Volume'].iloc[-1]/1e6:.1f}M")
-    m3.metric("RSI (强弱)", f"{ta.rsi(hist['Close']).iloc[-1]:.1f}")
-    m4.metric("市盈率", f"{info.get('trailingPE', 0):.1f}")
-    m5.metric("机构持仓", f"{info.get('heldPercentInstitutions', 0)*100:.0f}%")
+    # 顶部指标栏
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("最新价", f"${hist['Close'].iloc[-1]:.2f}", f"{(hist['Close'].iloc[-1]-hist['Close'].iloc[-2]):.2f}")
+    m2.metric("RSI (强弱)", f"{ta.rsi(hist['Close']).iloc[-1]:.1f}")
+    m3.metric("MACD趋势", "Bullish" if ta.macd(hist['Close']).iloc[-1, 2] > 0 else "Bearish")
+    m4.metric("成交量", f"{hist['Volume'].iloc[-1]/1e6:.1f}M")
 
-    # 3. 📈 专业走势图 (带布林带)
-    # 计算技术指标
+    # 📈 主图表 (带 MACD 子图)
+    # 计算指标
     bb = ta.bbands(hist['Close'], length=20, std=2.0)
+    macd = ta.macd(hist['Close'])
+    
     if bb is not None:
         hist = pd.concat([hist, bb], axis=1)
-        bbl = bb.columns[0]
-        bbu = bb.columns[2]
+        bbl, bbu = bb.columns[0], bb.columns[2]
     else: bbl = bbu = None
 
-    fig = go.Figure()
-    
-    # K线
-    fig.add_trace(go.Candlestick(
-        x=hist.index,
-        open=hist['Open'], high=hist['High'],
-        low=hist['Low'], close=hist['Close'],
-        name='Price'
-    ))
-    
-    # 布林带区域 (美化: 使用填充色)
-    if bbl:
-        fig.add_trace(go.Scatter(
-            x=hist.index, y=hist[bbu],
-            line=dict(width=0), showlegend=False, hoverinfo='skip'
-        ))
-        fig.add_trace(go.Scatter(
-            x=hist.index, y=hist[bbl],
-            fill='tonexty', # 填充两条线中间的区域
-            fillcolor='rgba(0, 100, 255, 0.1)',
-            line=dict(width=0), showlegend=False, hoverinfo='skip',
-            name='Bollinger'
-        ))
+    # 创建子图 (上图K线，下图MACD)
+    from plotly.subplots import make_subplots
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                        vertical_spacing=0.03, subplot_titles=('价格走势', 'MACD'),
+                        row_heights=[0.7, 0.3])
 
-    fig.update_layout(
-        height=500,
-        margin=dict(l=20, r=20, t=20, b=20),
-        xaxis_rangeslider_visible=False,
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        xaxis=dict(showgrid=True, gridcolor='#f0f0f0'),
-        yaxis=dict(showgrid=True, gridcolor='#f0f0f0'),
-    )
+    # 1. K线图
+    fig.add_trace(go.Candlestick(
+        x=hist.index, open=hist['Open'], high=hist['High'],
+        low=hist['Low'], close=hist['Close'], name='Price'
+    ), row=1, col=1)
+
+    # 布林带
+    if bbl:
+        fig.add_trace(go.Scatter(x=hist.index, y=hist[bbu], line=dict(width=0), showlegend=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=hist.index, y=hist[bbl], fill='tonexty', 
+                                 fillcolor='rgba(0,100,255,0.1)', line=dict(width=0), 
+                                 name='Bollinger'), row=1, col=1)
+
+    # 2. MACD图
+    if macd is not None:
+        # MACD Line
+        fig.add_trace(go.Scatter(x=hist.index, y=macd.iloc[:, 0], line=dict(color='blue', width=1), name='MACD'), row=2, col=1)
+        # Signal Line
+        fig.add_trace(go.Scatter(x=hist.index, y=macd.iloc[:, 2], line=dict(color='orange', width=1), name='Signal'), row=2, col=1)
+        # Histogram
+        colors = ['green' if val >= 0 else 'red' for val in macd.iloc[:, 1]]
+        fig.add_trace(go.Bar(x=hist.index, y=macd.iloc[:, 1], marker_color=colors, name='Hist'), row=2, col=1)
+
+    fig.update_layout(height=600, xaxis_rangeslider_visible=False, showlegend=False)
     st.plotly_chart(fig, use_container_width=True)
 
-    # 4. 交易建议与新闻
-    c_plan, c_news = st.columns([1, 1])
-    
-    with c_plan:
-        st.subheader("💡 交易策略")
-        # 简单策略逻辑
-        atr = ta.atr(hist['High'], hist['Low'], hist['Close'], length=14).iloc[-1]
-        support = hist[bbl].iloc[-1] if bbl else curr_price * 0.95
-        
-        buy_zone = max(support, curr_price - atr)
-        stop_loss = buy_zone - atr * 1.5
-        target = buy_zone + atr * 3
-        
-        st.info(f"""
-        **建议交易计划 ({timeframe}级别):**
-        
-        🔵 **买入区间:** ${buy_zone:.2f} 附近
-        🔴 **止损位:** ${stop_loss:.2f}
-        🟢 **目标位:** ${target:.2f}
-        
-        *逻辑: 基于布林带支撑与 ATR 波动率*
-        """)
-
-    with c_news:
-        st.subheader("📰 AI 速递")
-        with st.spinner("获取中..."):
-            news = get_news_ddg(selected_ticker)
-            if news:
-                for item in news:
-                    title_zh = translate_text(item.get('title', ''))
-                    link = item.get('url', '#')
-                    date = item.get('date', '')[:10]
-                    st.markdown(f"**[{title_zh}]({link})**")
-                    st.caption(f"📅 {date} | 来源: {item.get('source', 'Web')}")
-            else:
-                st.write("暂无最新消息")
+    # 新闻
+    st.subheader("📰 AI 资讯速递")
+    news = get_news_ddg(selected_ticker)
+    if news:
+        for item in news:
+            st.markdown(f"**[{translate_text(item.get('title',''))}]({item.get('url','#')})**")
+            st.caption(f"来源: {item.get('source','Web')} | {item.get('date','')[:10]}")
+    else:
+        st.write("暂无新闻")
